@@ -236,3 +236,201 @@ test('enemy behind wall is not drawn (z-buffer)', async ({ page }) => {
   // Enemy should NOT have line of sight (behind wall)
   expect(result.los).toBe(false);
 });
+
+// ===== IH-5: Levels, pickups, automap =====
+
+test('__IH.levels.length === 5', async ({ page }) => {
+  await page.goto(URL);
+  const count = await page.evaluate(() => window.__IH.levels.length);
+  expect(count).toBe(5);
+});
+
+test('BFS: player can reach exit and keys; levels 1-4 have >= 2 secrets', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const levels = window.__IH.levels;
+    const results = [];
+
+    for (let li = 0; li < levels.length; li++) {
+      const mapData = levels[li].map;
+      const h = mapData.length;
+      const w = mapData[0].length;
+
+      // Find P, X, keys needed (R/B/Y doors), keys available (r/b/y), secrets (S)
+      let start = null, exit = null;
+      const keysAvailable = [];
+      const keysNeeded = [];
+      let secretCount = 0;
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const ch = mapData[y][x];
+          if (ch === 'P') start = { x, y };
+          if (ch === 'X') exit = { x, y };
+          if (ch === 'r') keysAvailable.push({ color: 'red', x, y });
+          if (ch === 'b') keysAvailable.push({ color: 'blue', x, y });
+          if (ch === 'y') keysAvailable.push({ color: 'yellow', x, y });
+          if (ch === 'R') keysNeeded.push('red');
+          if (ch === 'B') keysNeeded.push('blue');
+          if (ch === 'Y') keysNeeded.push('yellow');
+          if (ch === 'S') secretCount++;
+        }
+      }
+
+      if (!start || !exit) {
+        results.push({ level: li, ok: false, reason: 'no start or exit' });
+        continue;
+      }
+
+      // BFS from start, collecting keys, opening doors
+      const walkable = (x, y, heldKeys) => {
+        if (x < 0 || x >= w || y < 0 || y >= h) return false;
+        const ch = mapData[y][x];
+        if (ch === '#') return false;
+        if (ch === 'R' && !heldKeys.has('red')) return false;
+        if (ch === 'B' && !heldKeys.has('blue')) return false;
+        if (ch === 'Y' && !heldKeys.has('yellow')) return false;
+        // X is an exit wall - player can reach the cell adjacent to activate it
+        // S secret walls are openable so treat as walkable
+        return true;
+      };
+
+      // Multi-pass BFS: collect reachable keys, then expand
+      let heldKeys = new Set();
+      let changed = true;
+      let reachable = new Set();
+
+      while (changed) {
+        changed = false;
+        const visited = new Set();
+        const queue = [{ x: start.x, y: start.y }];
+        visited.add(`${start.x},${start.y}`);
+
+        while (queue.length > 0) {
+          const { x, y } = queue.shift();
+          reachable.add(`${x},${y}`);
+          const ch = mapData[y][x];
+
+          // Pick up keys
+          for (const ka of keysAvailable) {
+            if (ka.x === x && ka.y === y && !heldKeys.has(ka.color)) {
+              heldKeys.add(ka.color);
+              changed = true;
+            }
+          }
+
+          for (const [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+            const nx = x + dx, ny = y + dy;
+            const key = `${nx},${ny}`;
+            if (!visited.has(key) && walkable(nx, ny, heldKeys)) {
+              visited.add(key);
+              queue.push({ x: nx, y: ny });
+            }
+          }
+        }
+      }
+
+      // Exit is a wall tile activated by pressing E while adjacent
+      const canReachExit = [[0,1],[0,-1],[1,0],[-1,0]].some(
+        ([dx,dy]) => reachable.has(`${exit.x+dx},${exit.y+dy}`)
+      );
+      const canReachAllKeys = keysAvailable.every(k => reachable.has(`${k.x},${k.y}`));
+
+      results.push({
+        level: li,
+        name: levels[li].name,
+        ok: canReachExit && canReachAllKeys,
+        canReachExit,
+        canReachAllKeys,
+        secrets: secretCount,
+        start: start,
+        exit: exit,
+        heldKeys: [...heldKeys],
+        neededKeys: keysNeeded
+      });
+    }
+
+    return results;
+  });
+
+  for (const r of result) {
+    expect(r, `Level ${r.level} (${r.name}): exit=${r.canReachExit}, keys=${r.canReachAllKeys}, held=${JSON.stringify(r.heldKeys)}, needed=${JSON.stringify(r.neededKeys)}`).toMatchObject({ ok: true });
+    if (r.level < 4) {
+      expect(r.secrets).toBeGreaterThanOrEqual(2);
+    }
+  }
+});
+
+test('acid damages player without Phase Suit; Phase Suit protects', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    // Load Refinery (level 1) which has acid
+    window.__IH.loadLevel(1);
+    const p = window.__IH.player;
+
+    // Find an acid tile
+    const mapData = window.__IH.levels[1].map;
+    let acidX = -1, acidY = -1;
+    for (let y = 0; y < mapData.length; y++) {
+      for (let x = 0; x < mapData[y].length; x++) {
+        if (mapData[y][x] === '~') { acidX = x; acidY = y; break; }
+      }
+      if (acidX >= 0) break;
+    }
+
+    if (acidX < 0) return { foundAcid: false };
+
+    // Place player on acid tile
+    p.x = acidX + 0.5;
+    p.y = acidY + 0.5;
+    p.health = 100;
+    p.phaseSuit = false;
+
+    // Check the cell is acid
+    const cell = window.__IH.map[acidY][acidX];
+
+    return { foundAcid: true, cellType: cell };
+  });
+
+  expect(result.foundAcid).toBe(true);
+  expect(result.cellType).toBe(30); // acid cell type
+
+  // Now test acid damages player
+  const acidDamage = await page.evaluate(() => {
+    const p = window.__IH.player;
+    p.health = 100;
+    p.phaseSuit = false;
+    const healthBefore = p.health;
+
+    // Simulate standing on acid for a bit - the movePlayer function handles acid
+    // We need to wait for game frames
+    return new Promise(resolve => {
+      setTimeout(() => {
+        resolve({ healthBefore, healthAfter: p.health });
+      }, 600);
+    });
+  });
+
+  expect(acidDamage.healthAfter).toBeLessThan(acidDamage.healthBefore);
+
+  // Test Phase Suit protects
+  const suitProtects = await page.evaluate(() => {
+    // Kill all enemies so they don't interfere
+    window.__IH.enemies.forEach(e => { e.state = 'dead'; });
+    const p = window.__IH.player;
+    p.health = 100;
+    p.phaseSuit = true;
+    window.__IH.phaseSuitTimer = 30; // set timer so suit doesn't expire
+    const healthBefore = p.health;
+
+    return new Promise(resolve => {
+      setTimeout(() => {
+        resolve({ healthBefore, healthAfter: p.health });
+      }, 600);
+    });
+  });
+
+  expect(suitProtects.healthAfter).toBe(suitProtects.healthBefore);
+});

@@ -29,6 +29,8 @@ const DOOR_SPEED = 2.0;
 const HUD_H = 32;
 const ROCKET_SPLASH_RADIUS = 3.0;
 const ROCKET_SPLASH_DAMAGE = 30;
+const ACID_DAMAGE_PER_SEC = 20;
+const PHASE_SUIT_DURATION = 30;
 
 // ========== TEXTURES ==========
 const textures = {};
@@ -126,61 +128,181 @@ createTexture('exitSwitch', (tc, S) => {
   tc.fillRect(S / 2 - 4, S / 2 - 2, 8, 4);
 });
 
+createTexture('acid', (tc, S) => {
+  const rng = seededRand(77);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const v = 40 + rng() * 40;
+    tc.fillStyle = `rgb(${Math.floor(v * 0.3)},${Math.floor(v + 60)},${Math.floor(v * 0.2)})`;
+    tc.fillRect(x, y, 1, 1);
+  }
+});
+
+createTexture('secretWall', (tc, S) => {
+  const rng = seededRand(42);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const v = 80 + rng() * 60;
+    const rust = rng() > 0.7 ? 30 : 0;
+    tc.fillStyle = `rgb(${v + rust},${v - 10},${v - 20})`;
+    tc.fillRect(x, y, 1, 1);
+  }
+  for (let ry = 4; ry < S; ry += 16) for (let rx = 4; rx < S; rx += 16) {
+    tc.fillStyle = '#555';
+    tc.beginPath(); tc.arc(rx, ry, 2, 0, Math.PI * 2); tc.fill();
+  }
+});
+
 // Wall type to texture mapping
 const WALL_TEXTURES = { 1: 'rustyMetal', 2: 'concrete', 3: 'techPanel' };
 
-// ========== MAP ==========
-const MAP_DATA = [
-  "################",
-  "#..............#",
-  "#..r.....s.....#",
-  "#....####......#",
-  "#..h.#..#......#",
-  "#....#..R......#",
-  "#....####..g...#",
-  "#..............#",
-  "#......P.......#",
-  "#..............#",
-  "#..b.....w.....#",
-  "#.......####...#",
-  "#.......#..B...#",
-  "#..f....#..#...#",
-  "#..D....#X.#...#",
-  "################"
+// ========== LEVELS ==========
+const LEVELS = [
+  {
+    name: 'Intake',
+    par: 120,
+    secrets: 2,
+    map: [
+      "####################",
+      "#..............g...#",
+      "#..r.....s.........#",
+      "#....####..........#",
+      "#..h.#..#..........#",
+      "#....#..R..........#",
+      "#....####..w.......#",
+      "#..........P.......#",
+      "#......+...........#",
+      "#..................#",
+      "#..b.....f.........#",
+      "#.......####.......#",
+      "#.......#..B.......#",
+      "#.......#..#.......#",
+      "S..D..H.#X.#......S#",
+      "####################"
+    ]
+  },
+  {
+    name: 'Refinery',
+    par: 180,
+    secrets: 2,
+    map: [
+      "####################",
+      "#..P...............#",
+      "#..................#",
+      "#..+...H...........#",
+      "#......~~~~........#",
+      "#......~~~~........#",
+      "#......~~~~........#",
+      "#...h..~~~~..s.....#",
+      "#..................#",
+      "#.........r........#",
+      "######D#####.......#",
+      "#..............h...#",
+      "#...p..............#",
+      "#..................#",
+      "#.....s............#",
+      "#........####R#####",
+      "#........#.........#",
+      "S....A...#.........#",
+      "#........#..X......#",
+      "######S#############"
+    ]
+  },
+  {
+    name: 'Barracks',
+    par: 240,
+    secrets: 2,
+    map: [
+      "####################",
+      "#..P...#...........#",
+      "#......#......h....#",
+      "#......D...........#",
+      "#......#...........#",
+      "#..+...#.....s.....#",
+      "####D####..........#",
+      "#........#...####..#",
+      "#..h..g..#....r.#..#",
+      "#........D......#..#",
+      "#........#...####..#",
+      "####R#####.........#",
+      "#..........s...h...#",
+      "#....H.............#",
+      "#......b.......g...#",
+      "#..................#",
+      "S......A..........S#",
+      "#...########B######",
+      "#...#..X...........#",
+      "####################"
+    ]
+  },
+  {
+    name: 'Deep Shaft',
+    par: 300,
+    secrets: 2,
+    map: [
+      "####################",
+      "#.P................#",
+      "#..+...............#",
+      "#......h...........#",
+      "#.........^........#",
+      "#.........^........#",
+      "#..s......^....w...#",
+      "#.........^........#",
+      "####D##############",
+      "#..................#",
+      "#...g......h.......#",
+      "#..................#",
+      "#........^####.....#",
+      "#........^#..R.....#",
+      "#...r....^#..#.....#",
+      "S........^#..#....S#",
+      "#.....s...#..#.....#",
+      "#.........#..#.....#",
+      "#.......H.#X.#.....#",
+      "####################"
+    ]
+  },
+  {
+    name: 'The Bore',
+    par: 360,
+    secrets: 0,
+    map: [
+      "####################",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#...P..............#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#........h.........#",
+      "#..................#",
+      "#...........s......#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#...............X..#",
+      "####################"
+    ]
+  }
 ];
 
-const mapW = MAP_DATA[0].length;
-const mapH = MAP_DATA.length;
+// ========== MAP STATE ==========
+let mapW = 0;
+let mapH = 0;
 const map = [];
 const doors = [];
 let startX = 8.5, startY = 8.5;
 
 // Cell types: 0=floor, 1=wall(rusty), 2=wall(concrete), 3=wall(tech),
-// 10=door, 11=redDoor, 12=blueDoor, 13=yellowDoor, 20=exit
-// Items on floor: stored separately
+// 10=door, 11=redDoor, 12=blueDoor, 13=yellowDoor, 20=exit,
+// 30=acid floor, 40=secret wall
 const floorItems = [];
 
-for (let y = 0; y < mapH; y++) {
-  map[y] = [];
-  for (let x = 0; x < mapW; x++) {
-    const ch = MAP_DATA[y][x];
-    switch (ch) {
-      case 'P': startX = x + 0.5; startY = y + 0.5; map[y][x] = 0; break;
-      case '#': map[y][x] = 1; break;
-      case 'D': map[y][x] = 10; doors.push({ x, y, type: 'door', open: 0, opening: false, locked: null }); break;
-      case 'R': map[y][x] = 11; doors.push({ x, y, type: 'doorRed', open: 0, opening: false, locked: 'red' }); break;
-      case 'B': map[y][x] = 12; doors.push({ x, y, type: 'doorBlue', open: 0, opening: false, locked: 'blue' }); break;
-      case 'Y': map[y][x] = 13; doors.push({ x, y, type: 'doorYellow', open: 0, opening: false, locked: 'yellow' }); break;
-      case 'X': map[y][x] = 20; break;
-      case 'r': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_red', picked: false }); break;
-      case 'b': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_blue', picked: false }); break;
-      case 'y': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_yellow', picked: false }); break;
-      case 'h': case 's': case 'g': case 'w': case 'f':
-        map[y][x] = 0; break; // enemies parsed in second pass
-      default: map[y][x] = 0; break;
-    }
-  }
-}
+// Visited cells for automap
+const visitedCells = [];
 
 function getCell(x, y) {
   const mx = Math.floor(x);
@@ -193,8 +315,9 @@ function isSolid(x, y) {
   const cell = getCell(x, y);
   if (cell >= 1 && cell <= 3) return true; // walls
   if (cell === 20) return true; // exit switch wall
+  if (cell === 40) return true; // secret wall (solid until opened)
   if (cell >= 10 && cell <= 13) {
-    // Door — check if fully open
+    // Door -- check if fully open
     const door = doors.find(d => d.x === Math.floor(x) && d.y === Math.floor(y));
     if (door && door.open >= 0.9) return false;
     return true;
@@ -229,6 +352,7 @@ function hasLineOfSight(x1, y1, x2, y2) {
     if (mx >= 0 && mx < mapW && my >= 0 && my < mapH) {
       const cell = map[my][mx];
       if (cell >= 1 && cell <= 3) return false;
+      if (cell === 40) return false; // secret walls block LOS
       if (cell >= 10 && cell <= 13) {
         const door = doors.find(d => d.x === mx && d.y === my);
         if (!door || door.open < 0.9) return false;
@@ -257,14 +381,6 @@ function spawnEnemy(ch, x, y) {
   });
 }
 
-// Parse enemies from map
-for (let y = 0; y < mapH; y++) {
-  for (let x = 0; x < mapW; x++) {
-    const ch = MAP_DATA[y][x];
-    if ('hsgwf'.includes(ch)) spawnEnemy(ch, x, y);
-  }
-}
-
 let lastShotTime = 0;
 
 function alertNearbyEnemies(x, y, radius) {
@@ -287,6 +403,7 @@ function damageEnemy(enemy, dmg, attacker) {
   enemy.hp -= dmg;
   if (enemy.hp <= 0) {
     enemy.state = 'dead';
+    levelStats.kills++;
     // Drop ammo
     if (enemy.drops) {
       floorItems.push({ x: enemy.x, y: enemy.y, type: 'ammo_' + enemy.drops, picked: false });
@@ -345,7 +462,7 @@ function updateEnemies(dt) {
       continue;
     }
 
-    // Alert → chase
+    // Alert -> chase
     if (e.state === 'alert') {
       e.state = 'chase';
     }
@@ -410,7 +527,7 @@ function renderEnemies() {
     const spriteW = Math.floor(spriteH * 0.6);
     const sy = Math.floor(H / 2 + spriteH / 2);
 
-    // Z-buffer check — only draw columns not occluded by walls
+    // Z-buffer check
     let anyVisible = false;
     for (let sx = screenX - spriteW / 2; sx < screenX + spriteW / 2; sx++) {
       const col = Math.floor(sx);
@@ -419,28 +536,24 @@ function renderEnemies() {
     }
     if (!anyVisible) continue;
 
-    // Draw sprite column by column with z-buffer
     const startCol = Math.max(0, Math.floor(screenX - spriteW / 2));
     const endCol = Math.min(W - 1, Math.floor(screenX + spriteW / 2));
 
     for (let col = startCol; col <= endCol; col++) {
-      if (dist >= zBuf[col]) continue; // behind wall
+      if (dist >= zBuf[col]) continue;
 
       const topY = Math.max(0, sy - spriteH);
       const botY = Math.min(H - HUD_H, sy);
 
-      // Body color
       let bodyColor = e.color;
       if (e.state === 'pain') bodyColor = '#fff';
       ctx.fillStyle = bodyColor;
       ctx.fillRect(col, topY + spriteH * 0.2, 1, (botY - topY) * 0.6);
 
-      // Head
       ctx.fillStyle = e.state === 'pain' ? '#faa' : '#da8';
       ctx.fillRect(col, topY, 1, spriteH * 0.2);
     }
 
-    // Eyes (draw once, not per column)
     if (screenX >= 0 && screenX < W && dist < zBuf[Math.min(W - 1, Math.max(0, screenX))]) {
       const topY = sy - spriteH;
       const eyeSize = Math.max(1, spriteH / 16);
@@ -457,6 +570,7 @@ let mouseDX = 0;
 let usePressed = false;
 
 let fireHeld = false;
+let automapVisible = false;
 
 document.addEventListener('keydown', e => {
   keysDown[e.code] = true;
@@ -464,6 +578,19 @@ document.addEventListener('keydown', e => {
   // Weapon switching with number keys
   if (e.code >= 'Digit1' && e.code <= 'Digit6') {
     switchWeapon(parseInt(e.code.charAt(5)) - 1);
+  }
+  // Tab toggles automap
+  if (e.code === 'Tab') {
+    e.preventDefault();
+    automapVisible = !automapVisible;
+  }
+  // Enter to continue from level complete / stats screen
+  if (e.code === 'Enter' && gameState === 'levelStats') {
+    if (currentLevelIndex + 1 < LEVELS.length) {
+      loadLevel(currentLevelIndex + 1);
+    } else {
+      gameState = 'victory';
+    }
   }
 });
 document.addEventListener('keyup', e => { keysDown[e.code] = false; });
@@ -495,7 +622,23 @@ const player = {
   angle: 0,
   health: 100,
   armour: 0,
-  keys: []
+  keys: [],
+  phaseSuit: false
+};
+
+let phaseSuitTimer = 0;
+
+// ========== LEVEL STATS ==========
+let currentLevelIndex = 0;
+let levelStats = {
+  kills: 0,
+  totalEnemies: 0,
+  secretsFound: 0,
+  totalSecrets: 0,
+  itemsPickedUp: 0,
+  totalItems: 0,
+  startTime: 0,
+  elapsedTime: 0
 };
 
 // ========== WEAPONS ==========
@@ -539,7 +682,6 @@ function fireWeapon() {
     const spread = (Math.random() - 0.5) * w.spread * 2;
     const angle = player.angle + spread;
     const ray = castRay(player.x, player.y, angle);
-    // Check if any enemy is closer than the wall hit
     let closestEnemy = null;
     let closestDist = ray.dist;
     for (const e of enemies) {
@@ -593,6 +735,13 @@ function tryUseDoor(door) {
 
 function activateExit() {
   gameState = 'levelComplete';
+  levelStats.elapsedTime = (performance.now() - levelStats.startTime) / 1000;
+  // Show stats screen after brief delay
+  setTimeout(() => {
+    if (gameState === 'levelComplete') {
+      gameState = 'levelStats';
+    }
+  }, 500);
 }
 
 function handleUse() {
@@ -612,6 +761,11 @@ function handleUse() {
   if (cell === 20) {
     activateExit();
   }
+  // Secret wall: open on E press
+  if (cell === 40) {
+    map[checkY][checkX] = 0; // open the secret wall
+    levelStats.secretsFound++;
+  }
 }
 
 function pickupItems() {
@@ -620,7 +774,14 @@ function pickupItems() {
     const dx = player.x - item.x;
     const dy = player.y - item.y;
     if (dx * dx + dy * dy < 0.5) {
+      // Check if pickup would be wasted (health/armour at max)
+      if (item.type === 'health_small' && player.health >= 100) continue;
+      if (item.type === 'health_medium' && player.health >= 100) continue;
+      if (item.type === 'armour_green' && player.armour >= 100) continue;
+
       item.picked = true;
+      levelStats.itemsPickedUp++;
+
       if (item.type === 'key_red' && !player.keys.includes('red')) player.keys.push('red');
       if (item.type === 'key_blue' && !player.keys.includes('blue')) player.keys.push('blue');
       if (item.type === 'key_yellow' && !player.keys.includes('yellow')) player.keys.push('yellow');
@@ -628,6 +789,13 @@ function pickupItems() {
       if (item.type === 'ammo_shells') ammo.shells += 4;
       if (item.type === 'ammo_rockets') ammo.rockets += 2;
       if (item.type === 'ammo_cells') ammo.cells += 10;
+      if (item.type === 'health_small') player.health = Math.min(100, player.health + 10);
+      if (item.type === 'health_medium') player.health = Math.min(100, player.health + 25);
+      if (item.type === 'armour_green') player.armour = Math.min(100, player.armour + 50);
+      if (item.type === 'phase_suit') {
+        player.phaseSuit = true;
+        phaseSuitTimer = PHASE_SUIT_DURATION;
+      }
     }
   }
 }
@@ -644,6 +812,24 @@ function updateDoors(dt) {
       if (!door.locked || player.keys.includes(door.locked)) {
         door.opening = true;
       }
+    }
+  }
+}
+
+function updateAcidDamage(dt) {
+  const cell = getCell(player.x, player.y);
+  if (cell === 30 && !player.phaseSuit) {
+    player.health -= ACID_DAMAGE_PER_SEC * dt;
+    damageFlash = Math.max(damageFlash, 0.1);
+  }
+}
+
+function updatePhaseSuit(dt) {
+  if (player.phaseSuit) {
+    phaseSuitTimer -= dt;
+    if (phaseSuitTimer <= 0) {
+      player.phaseSuit = false;
+      phaseSuitTimer = 0;
     }
   }
 }
@@ -689,9 +875,113 @@ function movePlayer(dt) {
   player.angle += mouseDX * ROT_SPEED;
   mouseDX = 0;
 
+  // Track visited cells for automap
+  const cx = Math.floor(player.x);
+  const cy = Math.floor(player.y);
+  if (cy >= 0 && cy < mapH && cx >= 0 && cx < mapW) {
+    visitedCells[cy][cx] = true;
+  }
+
   handleUse();
   pickupItems();
+  updateAcidDamage(dt > 0 ? dt : 0.016);
+  updatePhaseSuit(dt > 0 ? dt : 0.016);
 }
+
+// ========== LEVEL LOADING ==========
+function loadLevel(idx) {
+  if (idx < 0 || idx >= LEVELS.length) return;
+  currentLevelIndex = idx;
+  const level = LEVELS[idx];
+
+  // Clear arrays
+  map.length = 0;
+  doors.length = 0;
+  enemies.length = 0;
+  floorItems.length = 0;
+  visitedCells.length = 0;
+
+  mapH = level.map.length;
+  mapW = level.map[0].length;
+
+  let enemyCount = 0;
+  let itemCount = 0;
+
+  for (let y = 0; y < mapH; y++) {
+    map[y] = [];
+    visitedCells[y] = [];
+    for (let x = 0; x < mapW; x++) {
+      visitedCells[y][x] = false;
+      const ch = level.map[y][x];
+      switch (ch) {
+        case 'P': startX = x + 0.5; startY = y + 0.5; map[y][x] = 0; break;
+        case '#': map[y][x] = 1; break;
+        case 'D': map[y][x] = 10; doors.push({ x, y, type: 'door', open: 0, opening: false, locked: null }); break;
+        case 'R': map[y][x] = 11; doors.push({ x, y, type: 'doorRed', open: 0, opening: false, locked: 'red' }); break;
+        case 'B': map[y][x] = 12; doors.push({ x, y, type: 'doorBlue', open: 0, opening: false, locked: 'blue' }); break;
+        case 'Y': map[y][x] = 13; doors.push({ x, y, type: 'doorYellow', open: 0, opening: false, locked: 'yellow' }); break;
+        case 'X': map[y][x] = 20; break;
+        case '~': map[y][x] = 30; break; // acid floor
+        case 'S': map[y][x] = 40; break; // secret wall
+        case '^': map[y][x] = 0; break;  // lift tile (visual only for now)
+        case 'r': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_red', picked: false }); itemCount++; break;
+        case 'b': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_blue', picked: false }); itemCount++; break;
+        case 'y': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_yellow', picked: false }); itemCount++; break;
+        case '+': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'health_small', picked: false }); itemCount++; break;
+        case 'H': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'health_medium', picked: false }); itemCount++; break;
+        case 'A': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'armour_green', picked: false }); itemCount++; break;
+        case 'p': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'phase_suit', picked: false }); itemCount++; break;
+        case 'h': case 's': case 'g': case 'w': case 'f':
+          map[y][x] = 0; enemyCount++; break; // enemies parsed in second pass
+        default: map[y][x] = 0; break;
+      }
+    }
+  }
+
+  // Parse enemies from map (second pass)
+  for (let y = 0; y < mapH; y++) {
+    for (let x = 0; x < mapW; x++) {
+      const ch = level.map[y][x];
+      if ('hsgwf'.includes(ch)) spawnEnemy(ch, x, y);
+    }
+  }
+
+  // Reset player
+  player.x = startX;
+  player.y = startY;
+  player.angle = 0;
+  player.health = 100;
+  player.armour = 0;
+  player.keys = [];
+  player.phaseSuit = false;
+  phaseSuitTimer = 0;
+
+  // Reset weapons/ammo
+  ammo.bullets = Infinity;
+  ammo.shells = 20;
+  ammo.rockets = 5;
+  ammo.cells = 20;
+  currentWeapon = 0;
+  fireCooldown = 0;
+
+  // Reset level stats
+  levelStats = {
+    kills: 0,
+    totalEnemies: enemyCount,
+    secretsFound: 0,
+    totalSecrets: level.secrets,
+    itemsPickedUp: 0,
+    totalItems: itemCount,
+    startTime: performance.now(),
+    elapsedTime: 0
+  };
+
+  gameState = 'playing';
+  automapVisible = false;
+}
+
+// Load level 0 on start
+loadLevel(0);
 
 // ========== RENDER ==========
 const ctx = (() => {
@@ -720,6 +1010,7 @@ function getTextureForCell(cell) {
   if (cell === 12) return textures['doorBlue'];
   if (cell === 13) return textures['doorYellow'];
   if (cell === 20) return textures['exitSwitch'];
+  if (cell === 40) return textures['secretWall'];
   return textures['rustyMetal'];
 }
 
@@ -757,7 +1048,7 @@ function castRay(ox, oy, angle) {
 
     if (mapX < 0 || mapX >= mapW || mapY < 0 || mapY >= mapH) break;
     const cell = map[mapY][mapX];
-    if (cell !== 0) {
+    if (cell !== 0 && cell !== 30) { // acid floor (30) doesn't block rays
       // Doors that are fully open don't block rays
       if (cell >= 10 && cell <= 13) {
         const door = doors.find(d => d.x === mapX && d.y === mapY);
@@ -785,6 +1076,130 @@ function sampleTexture(texData, u, v) {
   return [texData[idx], texData[idx + 1], texData[idx + 2]];
 }
 
+function renderAutomap() {
+  // Draw automap overlay
+  const scale = 6;
+  const offsetX = 10;
+  const offsetY = 10;
+  const maxDrawW = W - 20;
+  const maxDrawH = H - HUD_H - 20;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, H - HUD_H);
+
+  // Center map on player
+  const pcx = Math.floor(player.x);
+  const pcy = Math.floor(player.y);
+  const viewRadius = Math.floor(Math.min(maxDrawW, maxDrawH) / scale / 2);
+
+  for (let my = 0; my < mapH; my++) {
+    for (let mx = 0; mx < mapW; mx++) {
+      const sx = offsetX + (mx - pcx + viewRadius) * scale + maxDrawW / 2 - viewRadius * scale;
+      const sy = offsetY + (my - pcy + viewRadius) * scale + maxDrawH / 2 - viewRadius * scale;
+
+      if (sx < 0 || sx + scale > W || sy < 0 || sy + scale > H - HUD_H) continue;
+
+      const cell = map[my][mx];
+      const visited = visitedCells[my] && visitedCells[my][mx];
+
+      if (cell >= 1 && cell <= 3 || cell === 40) {
+        // Wall or secret wall
+        ctx.fillStyle = visited ? '#fff' : '#444';
+        ctx.fillRect(sx, sy, scale, scale);
+      } else if (cell >= 10 && cell <= 13) {
+        // Door
+        const colors = { 10: '#a86', 11: '#f44', 12: '#44f', 13: '#ff4' };
+        ctx.fillStyle = colors[cell] || '#a86';
+        ctx.fillRect(sx, sy, scale, scale);
+      } else if (cell === 20) {
+        ctx.fillStyle = '#0f0';
+        ctx.fillRect(sx, sy, scale, scale);
+      } else if (cell === 30) {
+        // Acid
+        if (visited) {
+          ctx.fillStyle = '#0a0';
+          ctx.fillRect(sx, sy, scale, scale);
+        }
+      } else if (visited) {
+        ctx.fillStyle = '#222';
+        ctx.fillRect(sx, sy, scale, scale);
+      }
+    }
+  }
+
+  // Player position and direction
+  const px = offsetX + (player.x - pcx + viewRadius) * scale + maxDrawW / 2 - viewRadius * scale;
+  const py = offsetY + (player.y - pcy + viewRadius) * scale + maxDrawH / 2 - viewRadius * scale;
+  ctx.fillStyle = '#0f0';
+  ctx.beginPath();
+  ctx.arc(px, py, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Direction indicator
+  ctx.strokeStyle = '#0f0';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.lineTo(px + Math.cos(player.angle) * 8, py + Math.sin(player.angle) * 8);
+  ctx.stroke();
+
+  // Level name
+  ctx.fillStyle = '#0f0';
+  ctx.font = '8px monospace';
+  ctx.fillText('MAP: ' + LEVELS[currentLevelIndex].name, offsetX, H - HUD_H - 4);
+}
+
+function renderLevelStats() {
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+
+  ctx.fillStyle = '#0f0';
+  ctx.font = '16px monospace';
+  ctx.fillText('LEVEL COMPLETE', W / 2, 30);
+
+  ctx.fillStyle = '#ff0';
+  ctx.font = '12px monospace';
+  ctx.fillText(LEVELS[currentLevelIndex].name.toUpperCase(), W / 2, 50);
+
+  const statsY = 75;
+  const lineH = 20;
+  ctx.font = '10px monospace';
+
+  // Kills
+  const killPct = levelStats.totalEnemies > 0 ? Math.floor(levelStats.kills / levelStats.totalEnemies * 100) : 100;
+  ctx.fillStyle = '#fff';
+  ctx.fillText('KILLS: ' + killPct + '%  (' + levelStats.kills + '/' + levelStats.totalEnemies + ')', W / 2, statsY);
+
+  // Items
+  const itemPct = levelStats.totalItems > 0 ? Math.floor(levelStats.itemsPickedUp / levelStats.totalItems * 100) : 100;
+  ctx.fillText('ITEMS: ' + itemPct + '%  (' + levelStats.itemsPickedUp + '/' + levelStats.totalItems + ')', W / 2, statsY + lineH);
+
+  // Secrets
+  const secretPct = levelStats.totalSecrets > 0 ? Math.floor(levelStats.secretsFound / levelStats.totalSecrets * 100) : 100;
+  ctx.fillText('SECRETS: ' + secretPct + '%  (' + levelStats.secretsFound + '/' + levelStats.totalSecrets + ')', W / 2, statsY + lineH * 2);
+
+  // Time
+  const timeStr = Math.floor(levelStats.elapsedTime) + 's';
+  const parStr = LEVELS[currentLevelIndex].par + 's';
+  const timeColor = levelStats.elapsedTime <= LEVELS[currentLevelIndex].par ? '#0f0' : '#f44';
+  ctx.fillStyle = timeColor;
+  ctx.fillText('TIME: ' + timeStr + '  PAR: ' + parStr, W / 2, statsY + lineH * 3);
+
+  // Continue prompt
+  ctx.fillStyle = '#888';
+  ctx.font = '9px monospace';
+  if (currentLevelIndex + 1 < LEVELS.length) {
+    ctx.fillText('PRESS ENTER TO CONTINUE', W / 2, statsY + lineH * 5);
+  } else {
+    ctx.fillStyle = '#0f0';
+    ctx.fillText('ALL LEVELS COMPLETE!', W / 2, statsY + lineH * 5);
+  }
+
+  ctx.textAlign = 'start';
+}
+
 function render() {
   // Floor and ceiling with distance shading
   const halfH = H / 2;
@@ -800,6 +1215,11 @@ function render() {
 
       const idx = (y * W + x) * 4;
 
+      // Check if this floor pixel is on an acid tile
+      const fmx = Math.floor(floorX);
+      const fmy = Math.floor(floorY);
+      const isAcid = !isCeiling && fmx >= 0 && fmx < mapW && fmy >= 0 && fmy < mapH && map[fmy][fmx] === 30;
+
       if (isCeiling) {
         const cx = ((floorX * 4) & 7);
         const cy = ((floorY * 4) & 7);
@@ -807,6 +1227,12 @@ function render() {
         buf[idx] = Math.floor(checker * fog);
         buf[idx + 1] = Math.floor(checker * fog);
         buf[idx + 2] = Math.floor((checker + 10) * fog);
+      } else if (isAcid) {
+        // Green acid floor
+        const glow = Math.sin(performance.now() / 500 + floorX * 3 + floorY * 2) * 15;
+        buf[idx] = Math.floor(10 * fog);
+        buf[idx + 1] = Math.floor(Math.max(0, Math.min(255, (80 + glow) * fog)));
+        buf[idx + 2] = Math.floor(5 * fog);
       } else {
         const fx = ((floorX * 4) & 7);
         const fy = ((floorY * 4) & 7);
@@ -859,7 +1285,7 @@ function render() {
   const shakeY = screenShake > 0 ? (Math.random() - 0.5) * screenShake * 2 : 0;
   if (screenShake > 0) ctx.translate(shakeX, shakeY);
 
-  // Draw floor items (keys as sprites)
+  // Draw floor items (keys, pickups as sprites)
   for (const item of floorItems) {
     if (item.picked) continue;
     const dx = item.x - player.x;
@@ -880,11 +1306,28 @@ function render() {
     const sy = Math.floor(H / 2 + spriteH / 2);
 
     if (dist < zBuf[Math.max(0, Math.min(W - 1, screenX))]) {
-      const color = item.type === 'key_red' ? '#f44' : item.type === 'key_blue' ? '#44f' : '#ff4';
+      let color = '#fff';
+      if (item.type === 'key_red') color = '#f44';
+      else if (item.type === 'key_blue') color = '#44f';
+      else if (item.type === 'key_yellow') color = '#ff4';
+      else if (item.type === 'health_small') color = '#4f4';
+      else if (item.type === 'health_medium') color = '#4f4';
+      else if (item.type === 'armour_green') color = '#0a0';
+      else if (item.type === 'phase_suit') color = '#0ff';
+      else if (item.type.startsWith('ammo_')) color = '#aa0';
+
       ctx.fillStyle = color;
       ctx.fillRect(screenX - spriteW / 2, sy - spriteH, spriteW, spriteH);
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(screenX - 1, sy - spriteH + 2, 2, spriteH - 4);
+
+      // Icon indicators
+      if (item.type === 'key_red' || item.type === 'key_blue' || item.type === 'key_yellow') {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(screenX - 1, sy - spriteH + 2, 2, spriteH - 4);
+      } else if (item.type === 'health_small' || item.type === 'health_medium') {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(screenX - spriteW / 4, sy - spriteH / 2 - 1, spriteW / 2, 2);
+        ctx.fillRect(screenX - 1, sy - spriteH * 0.7, 2, spriteH * 0.4);
+      }
     }
   }
 
@@ -931,7 +1374,7 @@ function render() {
   ctx.fillStyle = '#f44';
   ctx.fillText('HP', 4, hudY + 12);
   ctx.fillStyle = '#fff';
-  ctx.fillText(Math.max(0, player.health).toString(), 4, hudY + 24);
+  ctx.fillText(Math.max(0, Math.floor(player.health)).toString(), 4, hudY + 24);
 
   // Armour
   ctx.fillStyle = '#48f';
@@ -959,6 +1402,18 @@ function render() {
     ctx.fillRect(kx, hudY + 16, 10, 10);
     kx += 14;
   }
+
+  // Phase suit indicator
+  if (player.phaseSuit) {
+    ctx.fillStyle = '#0ff';
+    ctx.font = '7px monospace';
+    ctx.fillText('SUIT:' + Math.ceil(phaseSuitTimer) + 's', 220, hudY + 24);
+  }
+
+  // Level name in HUD
+  ctx.fillStyle = '#888';
+  ctx.font = '7px monospace';
+  ctx.fillText('L' + (currentLevelIndex + 1) + ':' + LEVELS[currentLevelIndex].name, 260, hudY + 24);
 
   // Reactive pixel face (simplified)
   const faceX = W / 2 - 8;
@@ -995,7 +1450,12 @@ function render() {
   // Reset shake transform
   if (screenShake > 0) ctx.translate(-shakeX, -shakeY);
 
-  // Level complete overlay
+  // Automap overlay
+  if (automapVisible && gameState === 'playing') {
+    renderAutomap();
+  }
+
+  // Level complete overlay (brief flash before stats)
   if (gameState === 'levelComplete') {
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(0, 0, W, H);
@@ -1003,6 +1463,25 @@ function render() {
     ctx.font = '20px monospace';
     ctx.textAlign = 'center';
     ctx.fillText('LEVEL COMPLETE', W / 2, H / 2);
+    ctx.textAlign = 'start';
+  }
+
+  // Level stats screen
+  if (gameState === 'levelStats') {
+    renderLevelStats();
+  }
+
+  // Victory screen
+  if (gameState === 'victory') {
+    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#f80';
+    ctx.font = '20px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('IRONHELL', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#0f0';
+    ctx.font = '12px monospace';
+    ctx.fillText('ALL LEVELS COMPLETE', W / 2, H / 2 + 10);
     ctx.textAlign = 'start';
   }
 }
@@ -1051,8 +1530,9 @@ window.__IH = {
   set state(v) { gameState = v; },
   get player() { return player; },
   get map() { return map; },
-  get mapData() { return MAP_DATA; },
-  level: { map, mapW, mapH },
+  get mapData() { return LEVELS[currentLevelIndex].map; },
+  level: { get map() { return map; }, get mapW() { return mapW; }, get mapH() { return mapH; } },
+  levels: LEVELS,
   enemies,
   ENEMY_TYPES,
   hasLineOfSight,
@@ -1071,7 +1551,14 @@ window.__IH = {
   isWall,
   isSolid,
   tryUseDoor,
-  activateExit
+  activateExit,
+  loadLevel,
+  get currentLevelIndex() { return currentLevelIndex; },
+  get levelStats() { return levelStats; },
+  get automapVisible() { return automapVisible; },
+  set automapVisible(v) { automapVisible = v; },
+  get phaseSuitTimer() { return phaseSuitTimer; },
+  set phaseSuitTimer(v) { phaseSuitTimer = v; }
 };
 
 </script>
