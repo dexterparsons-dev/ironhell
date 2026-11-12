@@ -836,6 +836,14 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     automapVisible = !automapVisible;
   }
+  // M toggles audio mute
+  if (e.code === 'KeyM') {
+    audio.muted = !audio.muted;
+  }
+  // F toggles CRT filter
+  if (e.code === 'KeyF') {
+    crt = !crt;
+  }
   // Enter to continue from level complete / stats screen
   if (e.code === 'Enter' && gameState === 'levelStats') {
     if (currentLevelIndex + 1 < LEVELS.length) {
@@ -1757,6 +1765,9 @@ function render() {
     renderLevelStats();
   }
 
+  // CRT filter overlay (before game state overlays so they appear on top)
+  renderCRT();
+
   // Victory screen
   if (gameState === 'victory') {
     ctx.fillStyle = 'rgba(0,0,0,0.9)';
@@ -1829,6 +1840,127 @@ function gameLoop(time) {
 
 requestAnimationFrame(gameLoop);
 
+// ========== AUDIO ==========
+const audio = {
+  ctx: null,
+  muted: false,
+  sounds: {}
+};
+
+// Sound definitions for every weapon
+audio.sounds['Rivet Driver'] = function() { return { frequency: 800, type: 'square', duration: 0.05 }; };
+audio.sounds['Scatter Bore'] = function() { return { frequency: 200, type: 'sawtooth', duration: 0.15 }; };
+audio.sounds['Chain Rivet'] = function() { return { frequency: 900, type: 'square', duration: 0.03 }; };
+audio.sounds['Thermal Lance'] = function() { return { frequency: 1200, type: 'sine', duration: 0.3 }; };
+audio.sounds['Breach Launcher'] = function() { return { frequency: 100, type: 'sawtooth', duration: 0.4 }; };
+audio.sounds['The Core'] = function() { return { frequency: 60, type: 'sawtooth', duration: 0.8 }; };
+
+// Sound definitions for every enemy type
+audio.sounds['husk'] = function() { return { frequency: 300, type: 'square', duration: 0.2 }; };
+audio.sounds['spitter'] = function() { return { frequency: 600, type: 'sine', duration: 0.15 }; };
+audio.sounds['hound'] = function() { return { frequency: 400, type: 'sawtooth', duration: 0.1 }; };
+audio.sounds['warden'] = function() { return { frequency: 150, type: 'square', duration: 0.3 }; };
+audio.sounds['floater'] = function() { return { frequency: 500, type: 'sine', duration: 0.25 }; };
+
+// Misc sounds
+audio.sounds['door'] = function() { return { frequency: 120, type: 'square', duration: 0.5 }; };
+audio.sounds['pickup'] = function() { return { frequency: 1000, type: 'sine', duration: 0.1 }; };
+audio.sounds['playerHurt'] = function() { return { frequency: 250, type: 'sawtooth', duration: 0.15 }; };
+
+function initAudioContext() {
+  if (audio.ctx) return;
+  try {
+    audio.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch (e) {
+    // AudioContext not available (e.g. headless browser)
+  }
+}
+
+// Lazily create AudioContext on first user interaction
+document.addEventListener('click', initAudioContext, { once: false });
+document.addEventListener('keydown', initAudioContext, { once: false });
+
+function playSound(name, x, y) {
+  if (audio.muted) return;
+  if (!audio.ctx) return;
+  const soundDef = audio.sounds[name];
+  if (!soundDef) return;
+  const params = soundDef();
+
+  try {
+    const osc = audio.ctx.createOscillator();
+    const gain = audio.ctx.createGain();
+    const panner = audio.ctx.createStereoPanner();
+
+    // Calculate distance and panning from player
+    const dx = x - player.x;
+    const dy = y - player.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const maxDist = MAX_DEPTH;
+    const volume = Math.max(0, 1 - dist / maxDist);
+
+    // Stereo panning based on angle relative to player
+    const angleToSound = Math.atan2(dy, dx) - player.angle;
+    const pan = Math.max(-1, Math.min(1, Math.sin(angleToSound)));
+
+    osc.type = params.type || 'square';
+    osc.frequency.value = params.frequency || 440;
+    gain.gain.value = volume * 0.3;
+    panner.pan.value = pan;
+
+    osc.connect(gain);
+    gain.connect(panner);
+    panner.connect(audio.ctx.destination);
+
+    osc.start();
+    osc.stop(audio.ctx.currentTime + (params.duration || 0.1));
+  } catch (e) {
+    // Ignore audio errors
+  }
+}
+
+// Music - looping synth-metal generated in code
+let musicOsc = null;
+let musicGain = null;
+
+function startMusic() {
+  if (!audio.ctx) return;
+  if (musicOsc) return;
+  try {
+    musicOsc = audio.ctx.createOscillator();
+    musicGain = audio.ctx.createGain();
+    musicOsc.type = 'sawtooth';
+    musicOsc.frequency.value = 55; // low A drone
+    musicGain.gain.value = audio.muted ? 0 : 0.05;
+    musicOsc.connect(musicGain);
+    musicGain.connect(audio.ctx.destination);
+    musicOsc.start();
+  } catch (e) {
+    musicOsc = null;
+    musicGain = null;
+  }
+}
+
+// ========== CRT FILTER ==========
+let crt = false;
+
+function renderCRT() {
+  if (!crt) return;
+
+  // Scanlines: horizontal semi-transparent dark lines every 2 pixels
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+  for (let y = 0; y < H; y += 2) {
+    ctx.fillRect(0, y, W, 1);
+  }
+
+  // Vignette: radial darkening toward edges
+  const grd = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.7);
+  grd.addColorStop(0, 'rgba(0,0,0,0)');
+  grd.addColorStop(1, 'rgba(0,0,0,0.6)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+}
+
 // ========== DEBUG ==========
 window.__IH = {
   get state() { return gameState; },
@@ -1865,7 +1997,11 @@ window.__IH = {
   get phaseSuitTimer() { return phaseSuitTimer; },
   set phaseSuitTimer(v) { phaseSuitTimer = v; },
   boss,
-  updateBossPhase
+  updateBossPhase,
+  audio,
+  get crt() { return crt; },
+  set crt(v) { crt = v; },
+  playSound
 };
 
 </script>

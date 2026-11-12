@@ -482,3 +482,46 @@ test('boss HP 0 sets state to victory', async ({ page }) => {
   expect(result.state).toBe('victory');
   expect(result.active).toBe(false);
 });
+
+// ===== IH-7: Audio & CRT =====
+
+test('__IH.audio.sounds has key for every weapon and enemy type', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const s = window.__IH.audio.sounds;
+    const weaponNames = window.__IH.weapons.map(w => w.name);
+    const enemyTypes = ['husk', 'spitter', 'hound', 'warden', 'floater'];
+    const hasWeapons = weaponNames.every(n => n in s);
+    const hasEnemies = enemyTypes.every(n => n in s);
+    return { hasWeapons, hasEnemies, keys: Object.keys(s) };
+  });
+  expect(result.hasWeapons).toBe(true);
+  expect(result.hasEnemies).toBe(true);
+});
+
+test('M toggles audio.muted; F toggles crt', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const before = await page.evaluate(() => ({
+    muted: window.__IH.audio.muted,
+    crt: window.__IH.crt
+  }));
+
+  await page.keyboard.press('m');
+  await page.waitForTimeout(100);
+
+  const afterM = await page.evaluate(() => ({
+    muted: window.__IH.audio.muted
+  }));
+
+  await page.keyboard.press('f');
+  await page.waitForTimeout(100);
+
+  const afterF = await page.evaluate(() => ({
+    crt: window.__IH.crt
+  }));
+
+  expect(afterM.muted).toBe(!before.muted);
+  expect(afterF.crt).toBe(!before.crt);
+});
