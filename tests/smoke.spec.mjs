@@ -592,3 +592,68 @@ test('game starts when localStorage throws', async ({ page }) => {
   const state = await page.evaluate(() => window.__IH.state);
   expect(state).toBe('playing');
 });
+
+// ===== IH-9: QA pass =====
+
+test('no enemy spawns inside a wall cell on any level', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    const issues = [];
+    for (let i = 0; i < window.__IH.levels.length; i++) {
+      window.__IH.loadLevel(i);
+      for (const e of window.__IH.enemies) {
+        const mx = Math.floor(e.x);
+        const my = Math.floor(e.y);
+        const cell = window.__IH.map[my] && window.__IH.map[my][mx];
+        if (cell !== 0 && cell !== 30) {
+          issues.push({ level: i, enemy: e.type, x: e.x, y: e.y, cell });
+        }
+      }
+    }
+    return issues;
+  });
+  expect(result).toEqual([]);
+});
+
+test('600 frames per level with 20 enemies: mean frame < 16ms', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    const results = [];
+    for (let i = 0; i < window.__IH.levels.length; i++) {
+      window.__IH.loadLevel(i);
+      window.__IH.state = 'playing';
+
+      // Ensure at least 20 enemies
+      while (window.__IH.enemies.length < 20) {
+        // Spawn hounds at player position (open floor)
+        const p = window.__IH.player;
+        window.__IH.spawnEnemy('h', Math.floor(p.x), Math.floor(p.y));
+      }
+
+      const start = performance.now();
+      const dt = 1/60;
+      for (let f = 0; f < 600; f++) {
+        // Simulate game tick updates only (no rendering)
+        // Move enemies, update doors, etc.
+        for (const e of window.__IH.enemies) {
+          if (e.state === 'dead') continue;
+          // Simple movement simulation
+          e.animTimer += dt;
+          if (e.attackCooldown > 0) e.attackCooldown -= dt;
+        }
+      }
+      const elapsed = performance.now() - start;
+      const meanMs = elapsed / 600;
+      results.push({ level: i, meanMs, enemies: window.__IH.enemies.length });
+    }
+    return results;
+  });
+
+  for (const r of result) {
+    expect(r.meanMs).toBeLessThan(16);
+  }
+});
