@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IRONHELL</title>
+<style>
+* { margin: 0; padding: 0; }
+body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: crosshair; }
+#fps { position: fixed; top: 4px; left: 4px; color: #0f0; font: 14px monospace; z-index: 10; }
+</style>
+</head>
+<body>
+<div id="fps">0 FPS</div>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+
+// ========== CONFIG ==========
+const W = 320, H = 200;
+const FOV = Math.PI / 3;
+const MOVE_SPEED = 3.5;
+const RUN_MULT = 1.8;
+const ROT_SPEED = 0.003;
+const PLAYER_RADIUS = 0.2;
+const MAX_DEPTH = 20;
+const TILE = 1;
+
+// ========== MAP ==========
+const MAP_DATA = [
+  "################",
+  "#..............#",
+  "#..............#",
+  "#....####......#",
+  "#....#..#......#",
+  "#....#..#......#",
+  "#....####......#",
+  "#..............#",
+  "#......P.......#",
+  "#..............#",
+  "#..............#",
+  "#.......####...#",
+  "#.......#..#...#",
+  "#.......#..#...#",
+  "#.......####...#",
+  "################"
+];
+
+const mapW = MAP_DATA[0].length;
+const mapH = MAP_DATA.length;
+const map = [];
+let startX = 8.5, startY = 8.5;
+
+for (let y = 0; y < mapH; y++) {
+  map[y] = [];
+  for (let x = 0; x < mapW; x++) {
+    const ch = MAP_DATA[y][x];
+    if (ch === 'P') {
+      startX = x + 0.5;
+      startY = y + 0.5;
+      map[y][x] = 0;
+    } else if (ch === '#') {
+      map[y][x] = 1;
+    } else {
+      map[y][x] = 0;
+    }
+  }
+}
+
+function isWall(x, y) {
+  const mx = Math.floor(x);
+  const my = Math.floor(y);
+  if (mx < 0 || mx >= mapW || my < 0 || my >= mapH) return true;
+  return map[my][mx] !== 0;
+}
+
+// ========== INPUT ==========
+const keys = {};
+let mouseDX = 0;
+
+document.addEventListener('keydown', e => { keys[e.code] = true; });
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement) {
+    mouseDX += e.movementX;
+  }
+});
+
+const canvas = document.getElementById('c');
+canvas.addEventListener('click', () => {
+  canvas.requestPointerLock();
+});
+
+// ========== PLAYER ==========
+const player = {
+  x: startX,
+  y: startY,
+  angle: 0,
+  health: 100,
+  armour: 0,
+  keys: []
+};
+
+function movePlayer(dt) {
+  let mx = 0, my = 0;
+  const cos = Math.cos(player.angle);
+  const sin = Math.sin(player.angle);
+
+  if (keys['KeyW']) { mx += cos; my += sin; }
+  if (keys['KeyS']) { mx -= cos; my -= sin; }
+  if (keys['KeyA']) { mx += sin; my -= cos; }
+  if (keys['KeyD']) { mx -= sin; my += cos; }
+
+  const len = Math.sqrt(mx * mx + my * my);
+  if (len > 0) {
+    mx /= len;
+    my /= len;
+  }
+
+  let speed = MOVE_SPEED;
+  if (keys['ShiftLeft'] || keys['ShiftRight']) speed *= RUN_MULT;
+
+  const dx = mx * speed * dt;
+  const dy = my * speed * dt;
+
+  // Sliding collision
+  const newX = player.x + dx;
+  const newY = player.y + dy;
+
+  if (!isWall(newX + PLAYER_RADIUS * Math.sign(dx), player.y) &&
+      !isWall(newX - PLAYER_RADIUS * Math.sign(dx), player.y) &&
+      !isWall(newX, player.y + PLAYER_RADIUS) &&
+      !isWall(newX, player.y - PLAYER_RADIUS)) {
+    player.x = newX;
+  }
+
+  if (!isWall(player.x, newY + PLAYER_RADIUS * Math.sign(dy)) &&
+      !isWall(player.x, newY - PLAYER_RADIUS * Math.sign(dy)) &&
+      !isWall(player.x + PLAYER_RADIUS, newY) &&
+      !isWall(player.x - PLAYER_RADIUS, newY)) {
+    player.y = newY;
+  }
+
+  // Mouse look
+  player.angle += mouseDX * ROT_SPEED;
+  mouseDX = 0;
+}
+
+// ========== RENDER ==========
+const ctx = (() => {
+  canvas.width = W;
+  canvas.height = H;
+  // Scale canvas to fill screen while maintaining aspect ratio
+  function resize() {
+    const scaleX = window.innerWidth / W;
+    const scaleY = window.innerHeight / H;
+    const scale = Math.min(scaleX, scaleY);
+    canvas.style.width = (W * scale) + 'px';
+    canvas.style.height = (H * scale) + 'px';
+  }
+  resize();
+  window.addEventListener('resize', resize);
+  return canvas.getContext('2d');
+})();
+
+const imgData = ctx.createImageData(W, H);
+const buf = imgData.data;
+
+function castRay(ox, oy, angle) {
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+
+  let mapX = Math.floor(ox);
+  let mapY = Math.floor(oy);
+
+  const stepX = dx >= 0 ? 1 : -1;
+  const stepY = dy >= 0 ? 1 : -1;
+
+  let tMaxX = dx !== 0 ? ((dx >= 0 ? mapX + 1 : mapX) - ox) / dx : 1e30;
+  let tMaxY = dy !== 0 ? ((dy >= 0 ? mapY + 1 : mapY) - oy) / dy : 1e30;
+
+  const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : 1e30;
+  const tDeltaY = dy !== 0 ? Math.abs(1 / dy) : 1e30;
+
+  let side = 0;
+  let dist = 0;
+
+  for (let i = 0; i < 64; i++) {
+    if (tMaxX < tMaxY) {
+      dist = tMaxX;
+      tMaxX += tDeltaX;
+      mapX += stepX;
+      side = 0;
+    } else {
+      dist = tMaxY;
+      tMaxY += tDeltaY;
+      mapY += stepY;
+      side = 1;
+    }
+
+    if (mapX < 0 || mapX >= mapW || mapY < 0 || mapY >= mapH) break;
+    if (map[mapY][mapX] !== 0) {
+      return { dist, side, mapX, mapY };
+    }
+  }
+
+  return { dist: MAX_DEPTH, side: 0, mapX: 0, mapY: 0 };
+}
+
+function render() {
+  // Clear to dark ceiling/floor
+  for (let i = 0; i < W * H * 4; i += 4) {
+    const y = Math.floor(i / 4 / W);
+    if (y < H / 2) {
+      // Ceiling - dark grey
+      buf[i] = 40; buf[i+1] = 40; buf[i+2] = 50; buf[i+3] = 255;
+    } else {
+      // Floor - dark brown
+      buf[i] = 60; buf[i+1] = 50; buf[i+2] = 40; buf[i+3] = 255;
+    }
+  }
+
+  // Walls
+  for (let col = 0; col < W; col++) {
+    const rayAngle = player.angle - FOV / 2 + (col / W) * FOV;
+    const hit = castRay(player.x, player.y, rayAngle);
+
+    // Fish-eye correction
+    const perpDist = hit.dist * Math.cos(rayAngle - player.angle);
+    const wallH = Math.min(H * 2, H / perpDist);
+    const wallTop = Math.floor((H - wallH) / 2);
+    const wallBot = Math.floor((H + wallH) / 2);
+
+    // Wall color - darker on Y side
+    const shade = hit.side === 1 ? 0.7 : 1.0;
+    const fog = Math.max(0, 1 - perpDist / MAX_DEPTH);
+    const r = Math.floor(150 * shade * fog);
+    const g = Math.floor(120 * shade * fog);
+    const b = Math.floor(100 * shade * fog);
+
+    for (let y = Math.max(0, wallTop); y < Math.min(H, wallBot); y++) {
+      const idx = (y * W + col) * 4;
+      buf[idx] = r;
+      buf[idx+1] = g;
+      buf[idx+2] = b;
+      buf[idx+3] = 255;
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}
+
+// ========== LOOP ==========
+let lastTime = 0;
+let frameCount = 0;
+let fpsTime = 0;
+const fpsEl = document.getElementById('fps');
+
+function gameLoop(time) {
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+
+  movePlayer(dt);
+  render();
+
+  // FPS counter
+  frameCount++;
+  fpsTime += dt;
+  if (fpsTime >= 1) {
+    fpsEl.textContent = Math.round(frameCount / fpsTime) + ' FPS';
+    frameCount = 0;
+    fpsTime = 0;
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+
+// ========== DEBUG ==========
+window.__IH = {
+  get state() { return 'playing'; },
+  get player() { return player; },
+  get map() { return map; },
+  get mapData() { return MAP_DATA; },
+  level: { map, mapW, mapH },
+  enemies: [],
+  isWall
+};
+
+</script>
+</body>
+</html>
