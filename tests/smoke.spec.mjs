@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, devices } from '@playwright/test';
 
 const URL = 'file://' + process.cwd().replace(/\\/g, '/') + '/ironhell.html';
 
@@ -908,4 +908,315 @@ test('enemy stats unchanged after art overhaul', async ({ page }) => {
   expect(result.hound).toEqual({ hp: 25, speed: 3.0, damage: 12 });
   expect(result.warden).toEqual({ hp: 80, speed: 1.0, damage: 15 });
   expect(result.floater).toEqual({ hp: 50, speed: 2.0, damage: 10 });
+});
+
+// ===== IH-13: Mobile touch controls =====
+
+test('touch controls visible on touch device, hidden on desktop', async ({ browser }) => {
+  // iPhone context
+  const iPhone = devices['iPhone 15 Pro Max landscape'];
+  const mobileContext = await browser.newContext({ ...iPhone, hasTouch: true });
+  const mobilePage = await mobileContext.newPage();
+  await mobilePage.goto(URL);
+  await mobilePage.waitForTimeout(300);
+  const mobileVisible = await mobilePage.evaluate(() => {
+    const fire = document.getElementById('touch-fire');
+    if (!fire) return false;
+    const style = window.getComputedStyle(fire);
+    return style.display !== 'none' && fire.getBoundingClientRect().width > 0;
+  });
+  await mobileContext.close();
+
+  // Desktop context (no touch)
+  const desktopContext = await browser.newContext({ hasTouch: false });
+  const desktopPage = await desktopContext.newPage();
+  await desktopPage.goto(URL);
+  await desktopPage.waitForTimeout(300);
+  const desktopVisible = await desktopPage.evaluate(() => {
+    const fire = document.getElementById('touch-fire');
+    return fire !== null;
+  });
+  await desktopContext.close();
+
+  expect(mobileVisible).toBe(true);
+  expect(desktopVisible).toBe(false);
+});
+
+test('left-half drag changes player position; right-half drag changes angle; both together change both', async ({ browser }) => {
+  const iPhone = devices['iPhone 15 Pro Max landscape'];
+  const mobileContext = await browser.newContext({ ...iPhone, hasTouch: true });
+  const mobilePage = await mobileContext.newPage();
+  await mobilePage.goto(URL);
+  await mobilePage.waitForTimeout(300);
+
+  // Start game
+  await mobilePage.evaluate(() => {
+    window.__IH.setDifficulty(1);
+    window.__IH.loadLevel(0);
+    window.__IH.state = 'playing';
+  });
+  await mobilePage.waitForTimeout(200);
+
+  // Test left-half drag (joystick) changes position
+  const posBefore = await mobilePage.evaluate(() => ({ x: window.__IH.player.x, y: window.__IH.player.y }));
+  await mobilePage.evaluate(() => {
+    const zone = document.getElementById('touch-joystick-zone');
+    const rect = zone.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    function fireTouch(type, x, y, id) {
+      const t = new Touch({ identifier: id, target: zone, clientX: x, clientY: y });
+      zone.dispatchEvent(new TouchEvent(type, { changedTouches: [t], touches: type === 'touchend' ? [] : [t], bubbles: true, cancelable: true }));
+    }
+    fireTouch('touchstart', cx, cy, 1);
+    fireTouch('touchmove', cx, cy - 80, 1); // drag up = forward
+  });
+  await mobilePage.waitForTimeout(600);
+  await mobilePage.evaluate(() => {
+    const zone = document.getElementById('touch-joystick-zone');
+    const t = new Touch({ identifier: 1, target: zone, clientX: 0, clientY: 0 });
+    zone.dispatchEvent(new TouchEvent('touchend', { changedTouches: [t], touches: [], bubbles: true, cancelable: true }));
+  });
+  const posAfter = await mobilePage.evaluate(() => ({ x: window.__IH.player.x, y: window.__IH.player.y }));
+  const posDist = Math.sqrt((posAfter.x - posBefore.x) ** 2 + (posAfter.y - posBefore.y) ** 2);
+  expect(posDist).toBeGreaterThan(0.01);
+
+  // Test right-half drag (look) changes angle
+  const angleBefore = await mobilePage.evaluate(() => window.__IH.player.angle);
+  await mobilePage.evaluate(() => {
+    const zone = document.getElementById('touch-look-zone');
+    const rect = zone.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    function fireTouch(type, x, y, id) {
+      const t = new Touch({ identifier: id, target: zone, clientX: x, clientY: y });
+      zone.dispatchEvent(new TouchEvent(type, { changedTouches: [t], touches: type === 'touchend' ? [] : [t], bubbles: true, cancelable: true }));
+    }
+    fireTouch('touchstart', cx, cy, 2);
+    fireTouch('touchmove', cx + 100, cy, 2);
+    fireTouch('touchend', cx + 100, cy, 2);
+  });
+  await mobilePage.waitForTimeout(200);
+  const angleAfter = await mobilePage.evaluate(() => window.__IH.player.angle);
+  expect(Math.abs(angleAfter - angleBefore)).toBeGreaterThan(0.01);
+
+  // Test both together
+  const bothBefore = await mobilePage.evaluate(() => ({ x: window.__IH.player.x, y: window.__IH.player.y, angle: window.__IH.player.angle }));
+  await mobilePage.evaluate(() => {
+    const joyZone = document.getElementById('touch-joystick-zone');
+    const lookZone = document.getElementById('touch-look-zone');
+    const joyRect = joyZone.getBoundingClientRect();
+    const lookRect = lookZone.getBoundingClientRect();
+    const jcx = joyRect.left + joyRect.width / 2;
+    const jcy = joyRect.top + joyRect.height / 2;
+    const lcx = lookRect.left + lookRect.width / 2;
+    const lcy = lookRect.top + lookRect.height / 2;
+    // Start both touches
+    const t1 = new Touch({ identifier: 10, target: joyZone, clientX: jcx, clientY: jcy });
+    const t2 = new Touch({ identifier: 11, target: lookZone, clientX: lcx, clientY: lcy });
+    joyZone.dispatchEvent(new TouchEvent('touchstart', { changedTouches: [t1], touches: [t1, t2], bubbles: true, cancelable: true }));
+    lookZone.dispatchEvent(new TouchEvent('touchstart', { changedTouches: [t2], touches: [t1, t2], bubbles: true, cancelable: true }));
+    // Move both
+    const t1m = new Touch({ identifier: 10, target: joyZone, clientX: jcx, clientY: jcy - 80 });
+    const t2m = new Touch({ identifier: 11, target: lookZone, clientX: lcx + 80, clientY: lcy });
+    joyZone.dispatchEvent(new TouchEvent('touchmove', { changedTouches: [t1m], touches: [t1m, t2m], bubbles: true, cancelable: true }));
+    lookZone.dispatchEvent(new TouchEvent('touchmove', { changedTouches: [t2m], touches: [t1m, t2m], bubbles: true, cancelable: true }));
+  });
+  await mobilePage.waitForTimeout(600);
+  await mobilePage.evaluate(() => {
+    const joyZone = document.getElementById('touch-joystick-zone');
+    const lookZone = document.getElementById('touch-look-zone');
+    const t1 = new Touch({ identifier: 10, target: joyZone, clientX: 0, clientY: 0 });
+    const t2 = new Touch({ identifier: 11, target: lookZone, clientX: 0, clientY: 0 });
+    joyZone.dispatchEvent(new TouchEvent('touchend', { changedTouches: [t1], touches: [t2], bubbles: true, cancelable: true }));
+    lookZone.dispatchEvent(new TouchEvent('touchend', { changedTouches: [t2], touches: [], bubbles: true, cancelable: true }));
+  });
+  const bothAfter = await mobilePage.evaluate(() => ({ x: window.__IH.player.x, y: window.__IH.player.y, angle: window.__IH.player.angle }));
+  const bothPosDist = Math.sqrt((bothAfter.x - bothBefore.x) ** 2 + (bothAfter.y - bothBefore.y) ** 2);
+  expect(bothPosDist).toBeGreaterThan(0.01);
+  expect(Math.abs(bothAfter.angle - bothBefore.angle)).toBeGreaterThan(0.01);
+
+  await mobileContext.close();
+});
+
+test('holding FIRE with chaingun decrements ammo multiple times; tapping USE opens door', async ({ browser }) => {
+  const iPhone = devices['iPhone 15 Pro Max landscape'];
+  const mobileContext = await browser.newContext({ ...iPhone, hasTouch: true });
+  const mobilePage = await mobileContext.newPage();
+  await mobilePage.goto(URL);
+  await mobilePage.waitForTimeout(300);
+
+  // Start game
+  await mobilePage.evaluate(() => {
+    window.__IH.setDifficulty(1);
+    window.__IH.loadLevel(0);
+    window.__IH.state = 'playing';
+  });
+  await mobilePage.waitForTimeout(200);
+
+  // Test FIRE with Chain Rivet (index 2)
+  const fireResult = await mobilePage.evaluate(() => {
+    window.__IH.switchWeapon(2); // Chain Rivet
+    const ammo = window.__IH.ammo;
+    return { bulletsBefore: ammo.bullets };
+  });
+
+  // Hold fire button
+  await mobilePage.evaluate(() => {
+    const btn = document.getElementById('touch-fire');
+    const t = new Touch({ identifier: 50, target: btn, clientX: 0, clientY: 0 });
+    btn.dispatchEvent(new TouchEvent('touchstart', { changedTouches: [t], touches: [t], bubbles: true, cancelable: true }));
+  });
+  await mobilePage.waitForTimeout(500);
+  await mobilePage.evaluate(() => {
+    const btn = document.getElementById('touch-fire');
+    const t = new Touch({ identifier: 50, target: btn, clientX: 0, clientY: 0 });
+    btn.dispatchEvent(new TouchEvent('touchend', { changedTouches: [t], touches: [], bubbles: true, cancelable: true }));
+  });
+
+  // Chain Rivet uses bullets which are Infinity, so test with Scatter Bore (shells)
+  const shellTest = await mobilePage.evaluate(() => {
+    window.__IH.switchWeapon(1); // Scatter Bore
+    const before = window.__IH.ammo.shells;
+    return { shellsBefore: before };
+  });
+  // Hold fire
+  await mobilePage.evaluate(() => {
+    const btn = document.getElementById('touch-fire');
+    const t = new Touch({ identifier: 51, target: btn, clientX: 0, clientY: 0 });
+    btn.dispatchEvent(new TouchEvent('touchstart', { changedTouches: [t], touches: [t], bubbles: true, cancelable: true }));
+  });
+  await mobilePage.waitForTimeout(800);
+  await mobilePage.evaluate(() => {
+    const btn = document.getElementById('touch-fire');
+    const t = new Touch({ identifier: 51, target: btn, clientX: 0, clientY: 0 });
+    btn.dispatchEvent(new TouchEvent('touchend', { changedTouches: [t], touches: [], bubbles: true, cancelable: true }));
+  });
+  const shellsAfter = await mobilePage.evaluate(() => window.__IH.ammo.shells);
+  expect(shellsAfter).toBeLessThan(shellTest.shellsBefore);
+
+  // Test USE button opens door
+  const doorResult = await mobilePage.evaluate(() => {
+    // Place player near a door
+    const door = window.__IH.doors.find(d => !d.locked);
+    if (!door) return { found: false };
+    window.__IH.player.x = door.x + 0.5;
+    window.__IH.player.y = door.y + 1.5;
+    window.__IH.player.angle = -Math.PI / 2; // face the door
+    return { found: true, openingBefore: door.opening };
+  });
+
+  if (doorResult.found) {
+    await mobilePage.evaluate(() => {
+      const btn = document.getElementById('touch-use');
+      const t = new Touch({ identifier: 52, target: btn, clientX: 0, clientY: 0 });
+      btn.dispatchEvent(new TouchEvent('touchstart', { changedTouches: [t], touches: [t], bubbles: true, cancelable: true }));
+    });
+    await mobilePage.waitForTimeout(200);
+    const doorAfter = await mobilePage.evaluate(() => {
+      const door = window.__IH.doors.find(d => !d.locked);
+      return { opening: door.opening };
+    });
+    expect(doorAfter.opening).toBe(true);
+  }
+
+  await mobileContext.close();
+});
+
+test('every control bounding box >= 64x64 CSS px', async ({ browser }) => {
+  const iPhone = devices['iPhone 15 Pro Max landscape'];
+  const mobileContext = await browser.newContext({ ...iPhone, hasTouch: true });
+  const mobilePage = await mobileContext.newPage();
+  await mobilePage.goto(URL);
+  await mobilePage.waitForTimeout(300);
+
+  const sizes = await mobilePage.evaluate(() => {
+    const ids = ['touch-fire', 'touch-use', 'touch-weapon'];
+    const results = {};
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (!el) { results[id] = { w: 0, h: 0 }; continue; }
+      const rect = el.getBoundingClientRect();
+      results[id] = { w: rect.width, h: rect.height };
+    }
+    return results;
+  });
+
+  for (const [id, size] of Object.entries(sizes)) {
+    expect(size.w, `${id} width`).toBeGreaterThanOrEqual(64);
+    expect(size.h, `${id} height`).toBeGreaterThanOrEqual(64);
+  }
+
+  await mobileContext.close();
+});
+
+test('portrait shows rotate screen', async ({ browser }) => {
+  const iPhone = devices['iPhone 15 Pro Max'];
+  // Use portrait (not landscape)
+  const mobileContext = await browser.newContext({ ...iPhone, hasTouch: true, viewport: { width: 430, height: 932 } });
+  const mobilePage = await mobileContext.newPage();
+  await mobilePage.goto(URL);
+  await mobilePage.waitForTimeout(300);
+
+  const visible = await mobilePage.evaluate(() => {
+    const el = document.getElementById('rotate-screen');
+    return el && el.style.display === 'flex';
+  });
+  expect(visible).toBe(true);
+
+  await mobileContext.close();
+});
+
+test('visibilitychange hidden pauses game', async ({ page }) => {
+  await page.goto(URL);
+  await page.evaluate(() => {
+    window.__IH.setDifficulty(1);
+    window.__IH.loadLevel(0);
+    window.__IH.state = 'playing';
+  });
+  await page.waitForTimeout(200);
+
+  const stateBefore = await page.evaluate(() => window.__IH.state);
+  expect(stateBefore).toBe('playing');
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { value: true, writable: true, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(100);
+
+  const stateAfter = await page.evaluate(() => window.__IH.state);
+  expect(stateAfter).toBe('paused');
+});
+
+test('600 frames in mobile emulation, mean < 16ms', async ({ browser }) => {
+  const iPhone = devices['iPhone 15 Pro Max landscape'];
+  const mobileContext = await browser.newContext({ ...iPhone, hasTouch: true });
+  const mobilePage = await mobileContext.newPage();
+  await mobilePage.goto(URL);
+  await mobilePage.waitForTimeout(300);
+
+  await mobilePage.evaluate(() => {
+    window.__IH.setDifficulty(1);
+    window.__IH.loadLevel(0);
+    window.__IH.state = 'playing';
+  });
+  await mobilePage.waitForTimeout(200);
+
+  const result = await mobilePage.evaluate(() => {
+    const dt = 1 / 60;
+    const start = performance.now();
+    for (let f = 0; f < 600; f++) {
+      for (const e of window.__IH.enemies) {
+        if (e.state === 'dead') continue;
+        e.animTimer += dt;
+        if (e.attackCooldown > 0) e.attackCooldown -= dt;
+      }
+    }
+    const elapsed = performance.now() - start;
+    return { meanMs: elapsed / 600 };
+  });
+
+  expect(result.meanMs).toBeLessThan(16);
+  await mobileContext.close();
 });

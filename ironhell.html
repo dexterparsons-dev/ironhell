@@ -2,16 +2,32 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>IRONHELL</title>
 <style>
 * { margin: 0; padding: 0; }
-body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+html { touch-action: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; -webkit-user-select: none; user-select: none; position: fixed; width: 100%; height: 100%; }
 canvas { image-rendering: pixelated; image-rendering: crisp-edges; cursor: crosshair; }
 #fps { position: fixed; top: 4px; left: 4px; color: #0f0; font: 14px monospace; z-index: 10; }
+@supports (padding: env(safe-area-inset-left)) {
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+}
+#rotate-screen { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #1a0a00; z-index: 9999; justify-content: center; align-items: center; flex-direction: column; color: #d4652a; font: bold 24px monospace; text-align: center; }
+#rotate-screen svg { width: 80px; height: 80px; margin-bottom: 20px; fill: #d4652a; }
+.touch-btn { position: fixed; z-index: 100; border-radius: 12px; display: flex; justify-content: center; align-items: center; font: bold 14px monospace; color: #fff; pointer-events: auto; box-sizing: border-box; }
+#touch-fire { right: 16px; bottom: 16px; width: 72px; height: 72px; background: rgba(212,101,42,0.55); border: 2px solid #d4652a; }
+#touch-use { right: 16px; bottom: 100px; width: 72px; height: 72px; background: rgba(100,180,255,0.45); border: 2px solid #64b4ff; }
+#touch-weapon { right: 16px; bottom: 184px; width: 72px; height: 72px; background: rgba(180,180,60,0.45); border: 2px solid #b4b43c; }
+#touch-pause { right: 12px; top: 12px; width: 48px; height: 48px; background: rgba(100,100,100,0.5); border: 2px solid #888; font-size: 20px; }
+#touch-map { left: 12px; top: 12px; width: 48px; height: 48px; background: rgba(100,100,100,0.5); border: 2px solid #888; font-size: 12px; }
+#touch-joystick-zone { position: fixed; left: 0; top: 0; width: 50%; height: 100%; z-index: 50; pointer-events: auto; }
+#touch-look-zone { position: fixed; right: 0; top: 0; width: 50%; height: 100%; z-index: 49; pointer-events: auto; }
 </style>
 </head>
 <body>
 <div id="fps">0 FPS</div>
+<div id="rotate-screen"><svg viewBox="0 0 24 24"><path d="M7.34 6.41L.86 12.9l6.49 6.48 6.49-6.48-6.5-6.49zM3.69 12.9l3.66-3.66L11 12.9l-3.66 3.66-3.65-3.66zm15.67-6.26A8.95 8.95 0 0 0 13 4V1L8.45 5.55 13 10V7a6 6 0 0 1 4.9 2.52l2.46-1.88z"/></svg><span>Rotate your device</span></div>
 <canvas id="c"></canvas>
 <script>
 'use strict';
@@ -6592,6 +6608,12 @@ function movePlayer(dt) {
   if (keysDown['KeyA']) { mx += sin; my -= cos; }
   if (keysDown['KeyD']) { mx -= sin; my += cos; }
 
+  // Add touch joystick movement
+  if (touchMoveX !== 0 || touchMoveY !== 0) {
+    mx += touchMoveX;
+    my += touchMoveY;
+  }
+
   const len = Math.sqrt(mx * mx + my * my);
   if (len > 0) { mx /= len; my /= len; }
 
@@ -7497,6 +7519,250 @@ function renderCRT() {
   ctx.fillRect(0, 0, W, H);
 }
 
+// ========== TOUCH ==========
+const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+const touchControls = {};
+
+if (isTouchDevice) {
+  // Create touch control elements
+  const touchIds = ['touch-joystick-zone', 'touch-look-zone', 'touch-fire', 'touch-use', 'touch-weapon', 'touch-pause', 'touch-map'];
+  const touchLabels = { 'touch-fire': 'FIRE', 'touch-use': 'USE', 'touch-weapon': 'WPN', 'touch-pause': '| |', 'touch-map': 'MAP' };
+
+  for (const id of touchIds) {
+    const el = document.createElement('div');
+    el.id = id;
+    if (touchLabels[id]) {
+      el.className = 'touch-btn';
+      el.textContent = touchLabels[id];
+    }
+    document.body.appendChild(el);
+    touchControls[id] = el;
+  }
+
+  // Touch state tracking
+  let joystickTouchId = null;
+  let joystickStartX = 0, joystickStartY = 0;
+  let lookTouchId = null;
+  let lookLastX = 0, lookLastY = 0;
+  let fireTouchId = null;
+  let audioUnlocked = false;
+
+  function unlockAudio() {
+    if (!audioUnlocked) {
+      audioUnlocked = true;
+      initAudioContext();
+    }
+  }
+
+  function getTouchById(touches, id) {
+    for (let i = 0; i < touches.length; i++) {
+      if (touches[i].identifier === id) return touches[i];
+    }
+    return null;
+  }
+
+  // Joystick zone
+  const joyZone = touchControls['touch-joystick-zone'];
+  joyZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    unlockAudio();
+    const t = e.changedTouches[0];
+    if (joystickTouchId === null) {
+      joystickTouchId = t.identifier;
+      joystickStartX = t.clientX;
+      joystickStartY = t.clientY;
+    }
+  }, { passive: false });
+
+  joyZone.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (joystickTouchId !== null) {
+      const t = getTouchById(e.touches, joystickTouchId);
+      if (t) {
+        const dx = t.clientX - joystickStartX;
+        const dy = t.clientY - joystickStartY;
+        const deadzone = 10;
+        const maxDist = 60;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > deadzone) {
+          const nx = dx / Math.max(dist, maxDist);
+          const ny = dy / Math.max(dist, maxDist);
+          // Feed into movement: compute world-space movement from joystick
+          const cos = Math.cos(player.angle);
+          const sin = Math.sin(player.angle);
+          touchMoveX = nx * cos + ny * sin;  // forward/back + strafe
+          touchMoveY = nx * sin - ny * cos;
+          // Normalize correctly: forward is -dy (up on screen), right is +dx
+          touchMoveX = -ny * cos + nx * sin;  // actually: forward(-dy)*cos + strafe(dx)*sin
+          touchMoveY = -ny * sin - nx * cos;
+          // Simpler: treat joystick dx as strafe, -dy as forward
+          const fwd = -ny; // up = forward
+          const strafe = nx; // right = strafe right
+          touchMoveX = fwd * cos - strafe * sin;
+          touchMoveY = fwd * sin + strafe * cos;
+        } else {
+          touchMoveX = 0;
+          touchMoveY = 0;
+        }
+      }
+    }
+  }, { passive: false });
+
+  joyZone.addEventListener('touchend', e => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === joystickTouchId) {
+        joystickTouchId = null;
+        touchMoveX = 0;
+        touchMoveY = 0;
+      }
+    }
+  });
+  joyZone.addEventListener('touchcancel', e => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === joystickTouchId) {
+        joystickTouchId = null;
+        touchMoveX = 0;
+        touchMoveY = 0;
+      }
+    }
+  });
+
+  // Look zone
+  const lookZone = touchControls['touch-look-zone'];
+  lookZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    unlockAudio();
+    const t = e.changedTouches[0];
+    // Don't capture if on a button
+    if (t.target.classList && t.target.classList.contains('touch-btn')) return;
+    if (lookTouchId === null) {
+      lookTouchId = t.identifier;
+      lookLastX = t.clientX;
+      lookLastY = t.clientY;
+    }
+  }, { passive: false });
+
+  lookZone.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (lookTouchId !== null) {
+      const t = getTouchById(e.touches, lookTouchId);
+      if (t) {
+        const dx = t.clientX - lookLastX;
+        mouseDX += dx * 1.5; // scale touch look speed
+        lookLastX = t.clientX;
+        lookLastY = t.clientY;
+      }
+    }
+  }, { passive: false });
+
+  lookZone.addEventListener('touchend', e => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === lookTouchId) {
+        lookTouchId = null;
+      }
+    }
+  });
+  lookZone.addEventListener('touchcancel', e => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === lookTouchId) {
+        lookTouchId = null;
+      }
+    }
+  });
+
+  // Fire button
+  const fireBtn = touchControls['touch-fire'];
+  fireBtn.addEventListener('touchstart', e => {
+    e.preventDefault(); e.stopPropagation();
+    unlockAudio();
+    fireTouchId = e.changedTouches[0].identifier;
+    fireHeld = true;
+    // Handle menu interactions
+    if (gameState === 'title') { gameState = 'difficultySelect'; return; }
+    if (gameState === 'difficultySelect') { setDifficulty(difficultySelectIndex); loadLevel(0); gameState = 'playing'; return; }
+    if (gameState === 'gameOver') { loadLevel(currentLevelIndex); gameState = 'playing'; return; }
+    if (gameState === 'levelStats') {
+      if (currentLevelIndex + 1 > saveData.highestLevel) saveData.highestLevel = currentLevelIndex + 1;
+      const levelName = LEVELS[currentLevelIndex].name;
+      if (!saveData.bestTimes[levelName] || levelStats.elapsedTime < saveData.bestTimes[levelName]) saveData.bestTimes[levelName] = levelStats.elapsedTime;
+      writeSaveData();
+      if (currentLevelIndex + 1 < LEVELS.length) loadLevel(currentLevelIndex + 1); else gameState = 'victory';
+      return;
+    }
+  }, { passive: false });
+  fireBtn.addEventListener('touchend', e => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === fireTouchId) {
+        fireHeld = false;
+        fireTouchId = null;
+      }
+    }
+  });
+  fireBtn.addEventListener('touchcancel', e => { fireHeld = false; fireTouchId = null; });
+
+  // Use button
+  const useBtn = touchControls['touch-use'];
+  useBtn.addEventListener('touchstart', e => {
+    e.preventDefault(); e.stopPropagation();
+    unlockAudio();
+    usePressed = true;
+  }, { passive: false });
+
+  // Weapon cycle button
+  const wpnBtn = touchControls['touch-weapon'];
+  wpnBtn.addEventListener('touchstart', e => {
+    e.preventDefault(); e.stopPropagation();
+    unlockAudio();
+    switchWeapon((currentWeapon + 1) % weapons.length);
+  }, { passive: false });
+
+  // Pause button
+  const pauseBtn = touchControls['touch-pause'];
+  pauseBtn.addEventListener('touchstart', e => {
+    e.preventDefault(); e.stopPropagation();
+    unlockAudio();
+    if (gameState === 'playing') { gameState = 'paused'; pauseMenuIndex = 0; }
+    else if (gameState === 'paused') { gameState = 'playing'; }
+  }, { passive: false });
+
+  // Map button
+  const mapBtn = touchControls['touch-map'];
+  mapBtn.addEventListener('touchstart', e => {
+    e.preventDefault(); e.stopPropagation();
+    unlockAudio();
+    automapVisible = !automapVisible;
+  }, { passive: false });
+}
+
+// Touch movement vector (fed into movePlayer)
+let touchMoveX = 0, touchMoveY = 0;
+
+// Portrait orientation overlay
+function checkOrientation() {
+  const rotateEl = document.getElementById('rotate-screen');
+  if (!isTouchDevice || !rotateEl) return;
+  if (window.innerWidth < window.innerHeight) {
+    rotateEl.style.display = 'flex';
+    canvas.style.display = 'none';
+  } else {
+    rotateEl.style.display = 'none';
+    canvas.style.display = '';
+  }
+}
+window.addEventListener('resize', checkOrientation);
+checkOrientation();
+
+// Visibility change auto-pause
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && gameState === 'playing') {
+    gameState = 'paused';
+  }
+});
+
+// Web Audio unlock on first touch
+document.addEventListener('touchstart', initAudioContext, { once: true });
+
 // ========== DEBUG ==========
 window.__IH = {
   get state() { return gameState; },
@@ -7545,7 +7811,9 @@ window.__IH = {
   setDifficulty,
   get saveData() { return saveData; },
   SPRITES,
-  spriteCanvases
+  spriteCanvases,
+  isTouchDevice,
+  touchControls
 };
 
 </script>
