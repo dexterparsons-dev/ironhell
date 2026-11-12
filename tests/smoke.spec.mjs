@@ -111,3 +111,51 @@ test('activating X sets state to levelComplete', async ({ page }) => {
   });
   expect(result).toBe('levelComplete');
 });
+
+// ===== IH-3: Weapons and HUD =====
+
+test('__IH.weapons.length === 6', async ({ page }) => {
+  await page.goto(URL);
+  const count = await page.evaluate(() => window.__IH.weapons.length);
+  expect(count).toBe(6);
+});
+
+test('pressing 2 sets weapon to Scatter Bore; firing decrements shells', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    // Switch to weapon 2 (Scatter Bore, index 1)
+    window.__IH.switchWeapon(1);
+    const name = window.__IH.weapons[window.__IH.currentWeapon].name;
+    const shellsBefore = window.__IH.ammo.shells;
+    window.__IH.fireWeapon();
+    const shellsAfter = window.__IH.ammo.shells;
+    return { name, shellsBefore, shellsAfter };
+  });
+  expect(result.name).toBe('Scatter Bore');
+  expect(result.shellsAfter).toBe(result.shellsBefore - 1);
+});
+
+test('rocket splash within radius reduces player health', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    const p = window.__IH.player;
+    p.health = 100;
+    // Move player close to the north wall so rocket hits nearby
+    p.x = 2.5;
+    p.y = 1.3;
+    p.angle = -Math.PI / 2; // face north toward wall at y=0
+    // Switch to Breach Launcher (index 4)
+    window.__IH.switchWeapon(4);
+    window.__IH.ammo.rockets = 10;
+    const healthBefore = p.health;
+    window.__IH.fireWeapon();
+    const healthAfter = p.health;
+    return { healthBefore, healthAfter };
+  });
+  // Player should have taken splash damage from nearby wall hit
+  expect(result.healthAfter).toBeLessThan(result.healthBefore);
+});

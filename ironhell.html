@@ -26,6 +26,9 @@ const PLAYER_RADIUS = 0.2;
 const MAX_DEPTH = 20;
 const TEX_SIZE = 64;
 const DOOR_SPEED = 2.0;
+const HUD_H = 32;
+const ROCKET_SPLASH_RADIUS = 3.0;
+const ROCKET_SPLASH_DAMAGE = 30;
 
 // ========== TEXTURES ==========
 const textures = {};
@@ -204,13 +207,31 @@ const keysDown = {};
 let mouseDX = 0;
 let usePressed = false;
 
+let fireHeld = false;
+
 document.addEventListener('keydown', e => {
   keysDown[e.code] = true;
   if (e.code === 'KeyE') usePressed = true;
+  // Weapon switching with number keys
+  if (e.code >= 'Digit1' && e.code <= 'Digit6') {
+    switchWeapon(parseInt(e.code.charAt(5)) - 1);
+  }
 });
 document.addEventListener('keyup', e => { keysDown[e.code] = false; });
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement) mouseDX += e.movementX;
+});
+document.addEventListener('mousedown', e => {
+  if (e.button === 0 && document.pointerLockElement) fireHeld = true;
+});
+document.addEventListener('mouseup', e => {
+  if (e.button === 0) fireHeld = false;
+});
+document.addEventListener('wheel', e => {
+  if (document.pointerLockElement) {
+    const dir = e.deltaY > 0 ? 1 : -1;
+    switchWeapon((currentWeapon + dir + weapons.length) % weapons.length);
+  }
 });
 
 const canvas = document.getElementById('c');
@@ -227,6 +248,59 @@ const player = {
   armour: 0,
   keys: []
 };
+
+// ========== WEAPONS ==========
+const weapons = [
+  { name: 'Rivet Driver', ammoType: 'bullets', ammoCost: 1, damage: 15, fireRate: 0.3, spread: 0.02, pellets: 1, splash: 0, color: '#cc8' },
+  { name: 'Scatter Bore', ammoType: 'shells', ammoCost: 1, damage: 10, fireRate: 0.7, spread: 0.1, pellets: 7, splash: 0, color: '#fa0' },
+  { name: 'Chain Rivet', ammoType: 'bullets', ammoCost: 1, damage: 12, fireRate: 0.08, spread: 0.04, pellets: 1, splash: 0, color: '#ff0' },
+  { name: 'Thermal Lance', ammoType: 'cells', ammoCost: 2, damage: 40, fireRate: 0.5, spread: 0, pellets: 1, splash: 0, color: '#0ff' },
+  { name: 'Breach Launcher', ammoType: 'rockets', ammoCost: 1, damage: 80, fireRate: 0.8, spread: 0, pellets: 1, splash: ROCKET_SPLASH_RADIUS, color: '#f80' },
+  { name: 'The Core', ammoType: 'cells', ammoCost: 10, damage: 200, fireRate: 2.0, spread: 0, pellets: 1, splash: 5, color: '#f0f' }
+];
+
+const ammo = { bullets: Infinity, shells: 20, rockets: 5, cells: 20 };
+let currentWeapon = 0;
+let fireCooldown = 0;
+let weaponBob = 0;
+let weaponRecoil = 0;
+let muzzleFlash = 0;
+let screenShake = 0;
+let damageFlash = 0;
+
+function switchWeapon(idx) {
+  if (idx >= 0 && idx < weapons.length) currentWeapon = idx;
+}
+
+function fireWeapon() {
+  if (fireCooldown > 0) return;
+  const w = weapons[currentWeapon];
+  if (ammo[w.ammoType] < w.ammoCost) return;
+  if (ammo[w.ammoType] !== Infinity) ammo[w.ammoType] -= w.ammoCost;
+  fireCooldown = w.fireRate;
+  weaponRecoil = 6;
+  muzzleFlash = 0.08;
+  screenShake = 2;
+
+  // Rocket splash hurts player at point of impact
+  if (w.splash > 0) {
+    const hit = castRay(player.x, player.y, player.angle);
+    if (hit.dist < MAX_DEPTH) {
+      const hitX = player.x + Math.cos(player.angle) * hit.dist;
+      const hitY = player.y + Math.sin(player.angle) * hit.dist;
+      const dx = player.x - hitX;
+      const dy = player.y - hitY;
+      const distToPlayer = Math.sqrt(dx * dx + dy * dy);
+      if (distToPlayer < w.splash) {
+        const falloff = 1 - distToPlayer / w.splash;
+        const splashDmg = Math.floor(ROCKET_SPLASH_DAMAGE * falloff);
+        player.health -= splashDmg;
+        damageFlash = 0.3;
+        screenShake = 5;
+      }
+    }
+  }
+}
 
 function tryUseDoor(door) {
   if (door.opening) return;
@@ -495,28 +569,10 @@ function render() {
 
   ctx.putImageData(imgData, 0, 0);
 
-  // HUD: Draw held keys
-  const keyColors = { red: '#f44', blue: '#44f', yellow: '#ff4' };
-  let kx = W - 60;
-  ctx.font = '10px monospace';
-  for (const k of player.keys) {
-    ctx.fillStyle = keyColors[k] || '#fff';
-    ctx.fillRect(kx, 4, 16, 16);
-    ctx.fillStyle = '#000';
-    ctx.fillText(k[0].toUpperCase(), kx + 4, 15);
-    kx += 20;
-  }
-
-  // Level complete overlay
-  if (gameState === 'levelComplete') {
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#0f0';
-    ctx.font = '20px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('LEVEL COMPLETE', W / 2, H / 2);
-    ctx.textAlign = 'start';
-  }
+  // Screen shake offset
+  const shakeX = screenShake > 0 ? (Math.random() - 0.5) * screenShake * 2 : 0;
+  const shakeY = screenShake > 0 ? (Math.random() - 0.5) * screenShake * 2 : 0;
+  if (screenShake > 0) ctx.translate(shakeX, shakeY);
 
   // Draw floor items (keys as sprites)
   for (const item of floorItems) {
@@ -546,6 +602,121 @@ function render() {
       ctx.fillRect(screenX - 1, sy - spriteH + 2, 2, spriteH - 4);
     }
   }
+
+  // Weapon sprite (bottom center with bob and recoil)
+  const w = weapons[currentWeapon];
+  const bobX = Math.sin(weaponBob) * 3;
+  const bobY = Math.abs(Math.cos(weaponBob)) * 2;
+  const recoilY = Math.max(0, weaponRecoil);
+  const wpnX = W / 2 - 20 + bobX;
+  const wpnY = H - HUD_H - 50 + bobY + recoilY;
+
+  // Muzzle flash
+  if (muzzleFlash > 0) {
+    ctx.fillStyle = w.color;
+    ctx.globalAlpha = muzzleFlash * 10;
+    ctx.fillRect(wpnX - 5, wpnY - 15, 50, 15);
+    ctx.globalAlpha = 1;
+  }
+
+  // Weapon body
+  ctx.fillStyle = '#555';
+  ctx.fillRect(wpnX, wpnY, 40, 50);
+  ctx.fillStyle = '#777';
+  ctx.fillRect(wpnX + 5, wpnY, 30, 10);
+  ctx.fillStyle = w.color;
+  ctx.fillRect(wpnX + 12, wpnY - 5, 16, 8);
+  // Barrel
+  ctx.fillStyle = '#333';
+  ctx.fillRect(wpnX + 16, wpnY - 10, 8, 10);
+
+  // HUD bar (Doom-style bottom bar)
+  const hudY = H - HUD_H;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(0, hudY, W, HUD_H);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(0, hudY, W, 2);
+
+  ctx.font = '9px monospace';
+
+  // Health
+  ctx.fillStyle = '#f44';
+  ctx.fillText('HP', 4, hudY + 12);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(Math.max(0, player.health).toString(), 4, hudY + 24);
+
+  // Armour
+  ctx.fillStyle = '#48f';
+  ctx.fillText('AR', 44, hudY + 12);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(player.armour.toString(), 44, hudY + 24);
+
+  // Current ammo
+  const curAmmo = ammo[w.ammoType];
+  ctx.fillStyle = w.color;
+  ctx.fillText(w.name, 84, hudY + 12);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(curAmmo === Infinity ? 'INF' : curAmmo.toString(), 84, hudY + 24);
+
+  // All ammo counts
+  ctx.fillStyle = '#888';
+  ctx.font = '7px monospace';
+  ctx.fillText(`BUL:${ammo.bullets === Infinity ? 'INF' : ammo.bullets} SHL:${ammo.shells} RKT:${ammo.rockets} CEL:${ammo.cells}`, 160, hudY + 12);
+
+  // Keys in HUD
+  const keyColors = { red: '#f44', blue: '#44f', yellow: '#ff4' };
+  let kx = 160;
+  for (const k of player.keys) {
+    ctx.fillStyle = keyColors[k] || '#fff';
+    ctx.fillRect(kx, hudY + 16, 10, 10);
+    kx += 14;
+  }
+
+  // Reactive pixel face (simplified)
+  const faceX = W / 2 - 8;
+  const faceY = hudY + 4;
+  ctx.fillStyle = '#da8';
+  ctx.fillRect(faceX, faceY, 16, 20);
+  // Eyes
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(faceX + 3, faceY + 5, 4, 4);
+  ctx.fillRect(faceX + 9, faceY + 5, 4, 4);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(faceX + 4, faceY + 6, 2, 2);
+  ctx.fillRect(faceX + 10, faceY + 6, 2, 2);
+  // Mouth - changes with health
+  if (player.health > 60) {
+    ctx.fillStyle = '#a00';
+    ctx.fillRect(faceX + 5, faceY + 14, 6, 3);
+  } else if (player.health > 30) {
+    ctx.fillStyle = '#a00';
+    ctx.fillRect(faceX + 4, faceY + 14, 8, 2);
+  } else {
+    ctx.fillStyle = '#a00';
+    ctx.fillRect(faceX + 3, faceY + 13, 10, 4);
+    ctx.fillStyle = '#f00';
+    ctx.fillRect(faceX + 5, faceY + 14, 6, 2);
+  }
+
+  // Damage flash
+  if (damageFlash > 0) {
+    ctx.fillStyle = `rgba(255,0,0,${damageFlash * 0.5})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Reset shake transform
+  if (screenShake > 0) ctx.translate(-shakeX, -shakeY);
+
+  // Level complete overlay
+  if (gameState === 'levelComplete') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#0f0';
+    ctx.font = '20px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('LEVEL COMPLETE', W / 2, H / 2);
+    ctx.textAlign = 'start';
+  }
 }
 
 // ========== LOOP ==========
@@ -560,6 +731,16 @@ function gameLoop(time) {
 
   movePlayer(dt);
   updateDoors(dt);
+
+  // Weapon updates
+  if (fireCooldown > 0) fireCooldown -= dt;
+  if (fireHeld && gameState === 'playing') fireWeapon();
+  if (weaponRecoil > 0) weaponRecoil -= dt * 40;
+  if (muzzleFlash > 0) muzzleFlash -= dt;
+  if (screenShake > 0) screenShake -= dt * 15;
+  if (damageFlash > 0) damageFlash -= dt;
+  weaponBob += dt * 5;
+
   render();
 
   frameCount++;
@@ -587,6 +768,12 @@ window.__IH = {
   textures,
   doors,
   floorItems,
+  weapons,
+  ammo,
+  get currentWeapon() { return currentWeapon; },
+  set currentWeapon(v) { currentWeapon = v; },
+  switchWeapon,
+  fireWeapon,
   isWall,
   isSolid,
   tryUseDoor,
