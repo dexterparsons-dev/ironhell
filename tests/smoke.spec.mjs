@@ -434,3 +434,51 @@ test('acid damages player without Phase Suit; Phase Suit protects', async ({ pag
 
   expect(suitProtects.healthAfter).toBe(suitProtects.healthBefore);
 });
+
+// ===== IH-6: Boss =====
+
+test('boss at 65% HP sets phase 2 and spawns Hounds', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    window.__IH.loadLevel(4);
+    const boss = window.__IH.boss;
+    const enemiesBefore = window.__IH.enemies.filter(e => e.type === 'hound').length;
+    boss.hp = Math.floor(boss.maxHp * 0.65);
+    window.__IH.updateBossPhase();
+    const enemiesAfter = window.__IH.enemies.filter(e => e.type === 'hound').length;
+    return { phase: boss.phase, houndsSpawned: enemiesAfter - enemiesBefore };
+  });
+  expect(result.phase).toBe(2);
+  expect(result.houndsSpawned).toBe(2);
+});
+
+test('boss at 32% HP sets phase 3', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    window.__IH.loadLevel(4);
+    const boss = window.__IH.boss;
+    boss.hp = Math.floor(boss.maxHp * 0.32);
+    window.__IH.updateBossPhase();
+    return { phase: boss.phase };
+  });
+  expect(result.phase).toBe(3);
+});
+
+test('boss HP 0 sets state to victory', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    window.__IH.loadLevel(4);
+    const boss = window.__IH.boss;
+    boss.hp = 0;
+    window.__IH.updateBossPhase();
+    return { state: window.__IH.state, active: boss.active };
+  });
+  expect(result.state).toBe('victory');
+  expect(result.active).toBe(false);
+});

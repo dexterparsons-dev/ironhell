@@ -564,6 +564,258 @@ function renderEnemies() {
   }
 }
 
+// ========== BOSS ==========
+const boss = {
+  hp: 0,
+  maxHp: 500,
+  phase: 1,
+  x: 0,
+  y: 0,
+  active: false,
+  attackTimer: 0,
+  chargeDir: { x: 0, y: 0 },
+  beamAngle: 0
+};
+
+const bossOrbs = [];
+
+function spawnBoss(cx, cy) {
+  boss.hp = boss.maxHp;
+  boss.phase = 1;
+  boss.x = cx;
+  boss.y = cy;
+  boss.active = true;
+  boss.attackTimer = 0;
+  boss.chargeDir = { x: 0, y: 0 };
+  boss.beamAngle = 0;
+  bossOrbs.length = 0;
+}
+
+function updateBossPhase() {
+  if (!boss.active) return;
+  if (boss.hp <= 0) {
+    boss.hp = 0;
+    boss.active = false;
+    gameState = 'victory';
+    levelStats.elapsedTime = (performance.now() - levelStats.startTime) / 1000;
+    return;
+  }
+  const ratio = boss.hp / boss.maxHp;
+  if (ratio <= 0.33 && boss.phase < 3) {
+    boss.phase = 3;
+  } else if (ratio <= 0.66 && boss.phase < 2) {
+    boss.phase = 2;
+    // Spawn 2 Hounds near the boss
+    spawnEnemy('g', Math.floor(boss.x) - 1, Math.floor(boss.y));
+    spawnEnemy('g', Math.floor(boss.x) + 1, Math.floor(boss.y));
+  }
+}
+
+function updateBoss(dt) {
+  if (!boss.active) return;
+  boss.attackTimer -= dt;
+
+  const dx = player.x - boss.x;
+  const dy = player.y - boss.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+
+  if (boss.phase === 1) {
+    // Phase 1: spread volleys of slow orbs
+    if (boss.attackTimer <= 0) {
+      boss.attackTimer = 2.0;
+      const baseAngle = Math.atan2(dy, dx);
+      for (let i = -2; i <= 2; i++) {
+        const a = baseAngle + i * 0.2;
+        bossOrbs.push({ x: boss.x, y: boss.y, dx: Math.cos(a) * 2.5, dy: Math.sin(a) * 2.5, life: 5 });
+      }
+    }
+  } else if (boss.phase === 2) {
+    // Phase 2: charge toward player
+    if (boss.attackTimer <= 0) {
+      boss.attackTimer = 1.5;
+      if (dist > 0.1) {
+        boss.chargeDir.x = dx / dist;
+        boss.chargeDir.y = dy / dist;
+      }
+    }
+    // Move toward player
+    const speed = 3.0;
+    const nx = boss.x + boss.chargeDir.x * speed * dt;
+    const ny = boss.y + boss.chargeDir.y * speed * dt;
+    if (!isSolid(nx, ny)) { boss.x = nx; boss.y = ny; }
+    // Melee damage on contact
+    if (dist < 1.5) {
+      player.health -= 15 * dt;
+      damageFlash = 0.15;
+    }
+  } else if (boss.phase === 3) {
+    // Phase 3: sweeping beam attack
+    boss.beamAngle += dt * 1.5;
+    if (boss.attackTimer <= 0) {
+      boss.attackTimer = 0.1;
+      // Check if beam hits player
+      const beamDir = boss.beamAngle % (Math.PI * 2);
+      const toPlayer = Math.atan2(dy, dx);
+      let diff = beamDir - toPlayer;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      if (Math.abs(diff) < 0.2 && dist < 15) {
+        player.health -= 3;
+        damageFlash = 0.15;
+        screenShake = 2;
+      }
+    }
+  }
+
+  // Update orbs
+  for (let i = bossOrbs.length - 1; i >= 0; i--) {
+    const orb = bossOrbs[i];
+    orb.x += orb.dx * dt;
+    orb.y += orb.dy * dt;
+    orb.life -= dt;
+    if (orb.life <= 0 || isSolid(orb.x, orb.y)) {
+      bossOrbs.splice(i, 1);
+      continue;
+    }
+    // Hit player
+    const pdx = orb.x - player.x;
+    const pdy = orb.y - player.y;
+    if (pdx * pdx + pdy * pdy < 0.5) {
+      player.health -= 8;
+      damageFlash = 0.2;
+      bossOrbs.splice(i, 1);
+    }
+  }
+}
+
+function renderBoss() {
+  if (!boss.active) return;
+
+  // Render boss as large billboard sprite
+  const dx = boss.x - player.x;
+  const dy = boss.y - player.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < 0.3 || dist > MAX_DEPTH) return;
+
+  const angle = Math.atan2(dy, dx) - player.angle;
+  let normAngle = angle;
+  while (normAngle > Math.PI) normAngle -= Math.PI * 2;
+  while (normAngle < -Math.PI) normAngle += Math.PI * 2;
+  if (Math.abs(normAngle) > FOV / 2 + 0.3) return;
+
+  const screenX = Math.floor(W / 2 + normAngle / FOV * W);
+  const spriteH = Math.floor(H / dist * 1.4);  // Bigger than normal enemies
+  const spriteW = Math.floor(spriteH * 0.8);
+  const sy = Math.floor(H / 2 + spriteH / 2);
+
+  // Z-buffer check
+  let anyVisible = false;
+  for (let sx = screenX - spriteW / 2; sx < screenX + spriteW / 2; sx++) {
+    const col = Math.floor(sx);
+    if (col < 0 || col >= W) continue;
+    if (dist < zBuf[col]) { anyVisible = true; break; }
+  }
+  if (!anyVisible) return;
+
+  const startCol = Math.max(0, Math.floor(screenX - spriteW / 2));
+  const endCol = Math.min(W - 1, Math.floor(screenX + spriteW / 2));
+
+  // Color changes by phase
+  const bodyColors = { 1: '#a22', 2: '#d42', 3: '#f64' };
+  const bodyColor = bodyColors[boss.phase] || '#a22';
+
+  for (let col = startCol; col <= endCol; col++) {
+    if (dist >= zBuf[col]) continue;
+    const topY = Math.max(0, sy - spriteH);
+    const botY = Math.min(H - HUD_H, sy);
+
+    ctx.fillStyle = bodyColor;
+    ctx.fillRect(col, topY + spriteH * 0.15, 1, (botY - topY) * 0.7);
+
+    // Head
+    ctx.fillStyle = '#da8';
+    ctx.fillRect(col, topY, 1, spriteH * 0.15);
+  }
+
+  // Eyes
+  if (screenX >= 0 && screenX < W && dist < zBuf[Math.min(W - 1, Math.max(0, screenX))]) {
+    const topY = sy - spriteH;
+    const eyeSize = Math.max(2, spriteH / 10);
+    ctx.fillStyle = '#f00';
+    ctx.fillRect(screenX - eyeSize * 2, topY + spriteH * 0.05, eyeSize, eyeSize);
+    ctx.fillRect(screenX + eyeSize, topY + spriteH * 0.05, eyeSize, eyeSize);
+  }
+
+  // Phase 3: render beam
+  if (boss.phase === 3) {
+    const beamLen = 15;
+    const bx = boss.x + Math.cos(boss.beamAngle) * beamLen;
+    const by = boss.y + Math.sin(boss.beamAngle) * beamLen;
+    // Draw beam as line on screen
+    const bAngle = Math.atan2(by - player.y, bx - player.x) - player.angle;
+    let bNorm = bAngle;
+    while (bNorm > Math.PI) bNorm -= Math.PI * 2;
+    while (bNorm < -Math.PI) bNorm += Math.PI * 2;
+    const bScreenX = Math.floor(W / 2 + bNorm / FOV * W);
+    ctx.strokeStyle = '#f44';
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.6;
+    ctx.beginPath();
+    ctx.moveTo(screenX, sy - spriteH / 2);
+    ctx.lineTo(bScreenX, sy - spriteH / 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Render orbs
+  for (const orb of bossOrbs) {
+    const odx = orb.x - player.x;
+    const ody = orb.y - player.y;
+    const oDist = Math.sqrt(odx * odx + ody * ody);
+    if (oDist < 0.3 || oDist > MAX_DEPTH) continue;
+    const oAngle = Math.atan2(ody, odx) - player.angle;
+    let oNorm = oAngle;
+    while (oNorm > Math.PI) oNorm -= Math.PI * 2;
+    while (oNorm < -Math.PI) oNorm += Math.PI * 2;
+    if (Math.abs(oNorm) > FOV / 2 + 0.1) continue;
+    const osx = Math.floor(W / 2 + oNorm / FOV * W);
+    const oSize = Math.max(2, Math.floor(H / oDist * 0.15));
+    const osy = Math.floor(H / 2);
+    if (osx >= 0 && osx < W && oDist < zBuf[Math.max(0, Math.min(W - 1, osx))]) {
+      ctx.fillStyle = '#f80';
+      ctx.beginPath();
+      ctx.arc(osx, osy, oSize, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function renderBossHealthBar() {
+  if (!boss.active) return;
+  const barW = 200;
+  const barH = 8;
+  const barX = (W - barW) / 2;
+  const barY = 4;
+  // Background
+  ctx.fillStyle = '#333';
+  ctx.fillRect(barX, barY, barW, barH);
+  // Health
+  const ratio = Math.max(0, boss.hp / boss.maxHp);
+  const hpColor = boss.phase === 3 ? '#f44' : boss.phase === 2 ? '#f80' : '#f00';
+  ctx.fillStyle = hpColor;
+  ctx.fillRect(barX, barY, barW * ratio, barH);
+  // Border
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX, barY, barW, barH);
+  // Label
+  ctx.fillStyle = '#fff';
+  ctx.font = '7px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('DRILL MOTHER', W / 2, barY + barH + 8);
+  ctx.textAlign = 'start';
+}
+
 // ========== INPUT ==========
 const keysDown = {};
 let mouseDX = 0;
@@ -700,7 +952,30 @@ function fireWeapon() {
         closestDist = eDist;
       }
     }
-    if (closestEnemy) {
+    // Check boss hit
+    let hitBoss = false;
+    if (boss.active) {
+      const bdx = boss.x - player.x;
+      const bdy = boss.y - player.y;
+      const bDist = Math.sqrt(bdx * bdx + bdy * bdy);
+      if (bDist < closestDist) {
+        const bAngle = Math.atan2(bdy, bdx);
+        let bDiff = bAngle - angle;
+        while (bDiff > Math.PI) bDiff -= Math.PI * 2;
+        while (bDiff < -Math.PI) bDiff += Math.PI * 2;
+        const bHitWidth = 0.6 / bDist;  // Wider hitbox for boss
+        if (Math.abs(bDiff) < bHitWidth) {
+          hitBoss = true;
+          closestDist = bDist;
+          closestEnemy = null; // boss takes priority at this distance
+        }
+      }
+    }
+
+    if (hitBoss) {
+      boss.hp -= w.damage;
+      updateBossPhase();
+    } else if (closestEnemy) {
       damageEnemy(closestEnemy, w.damage, null);
     }
   }
@@ -978,6 +1253,13 @@ function loadLevel(idx) {
 
   gameState = 'playing';
   automapVisible = false;
+
+  // Spawn boss on level 4 (The Bore)
+  boss.active = false;
+  bossOrbs.length = 0;
+  if (idx === 4) {
+    spawnBoss(Math.floor(mapW / 2) + 0.5, Math.floor(mapH / 2) + 0.5);
+  }
 }
 
 // Load level 0 on start
@@ -1334,6 +1616,10 @@ function render() {
   // Render enemies (billboard sprites)
   renderEnemies();
 
+  // Render boss
+  renderBoss();
+  renderBossHealthBar();
+
   // Weapon sprite (bottom center with bob and recoil)
   const w = weapons[currentWeapon];
   const bobX = Math.sin(weaponBob) * 3;
@@ -1478,10 +1764,28 @@ function render() {
     ctx.fillStyle = '#f80';
     ctx.font = '20px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('IRONHELL', W / 2, H / 2 - 20);
+    ctx.fillText('IRONHELL', W / 2, 30);
     ctx.fillStyle = '#0f0';
-    ctx.font = '12px monospace';
-    ctx.fillText('ALL LEVELS COMPLETE', W / 2, H / 2 + 10);
+    ctx.font = '16px monospace';
+    ctx.fillText('EPISODE COMPLETE', W / 2, 55);
+
+    // Episode stats
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px monospace';
+    const statsY = 80;
+    const lineH = 16;
+    const killPct = levelStats.totalEnemies > 0 ? Math.floor(levelStats.kills / levelStats.totalEnemies * 100) : 100;
+    ctx.fillText('KILLS: ' + killPct + '%', W / 2, statsY);
+    const itemPct = levelStats.totalItems > 0 ? Math.floor(levelStats.itemsPickedUp / levelStats.totalItems * 100) : 100;
+    ctx.fillText('ITEMS: ' + itemPct + '%', W / 2, statsY + lineH);
+    const secretPct = levelStats.totalSecrets > 0 ? Math.floor(levelStats.secretsFound / levelStats.totalSecrets * 100) : 100;
+    ctx.fillText('SECRETS: ' + secretPct + '%', W / 2, statsY + lineH * 2);
+    const timeStr = Math.floor(levelStats.elapsedTime) + 's';
+    ctx.fillText('TIME: ' + timeStr, W / 2, statsY + lineH * 3);
+
+    ctx.fillStyle = '#888';
+    ctx.font = '9px monospace';
+    ctx.fillText('THE DRILL MOTHER IS DEFEATED', W / 2, statsY + lineH * 5);
     ctx.textAlign = 'start';
   }
 }
@@ -1499,6 +1803,7 @@ function gameLoop(time) {
   movePlayer(dt);
   updateDoors(dt);
   updateEnemies(dt);
+  updateBoss(dt);
 
   // Weapon updates
   if (fireCooldown > 0) fireCooldown -= dt;
@@ -1558,7 +1863,9 @@ window.__IH = {
   get automapVisible() { return automapVisible; },
   set automapVisible(v) { automapVisible = v; },
   get phaseSuitTimer() { return phaseSuitTimer; },
-  set phaseSuitTimer(v) { phaseSuitTimer = v; }
+  set phaseSuitTimer(v) { phaseSuitTimer = v; },
+  boss,
+  updateBossPhase
 };
 
 </script>
