@@ -738,3 +738,174 @@ test('enemy count per level within 10% of baseline', async ({ page }) => {
     expect(diff, `Level ${i}: ${counts[i]} vs baseline ${baselines[i]}`).toBeLessThanOrEqual(0.1);
   }
 });
+
+// ===== IH-12: Sprite art =====
+
+test('enemy types have correct frame counts', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const s = window.__IH.spriteCanvases;
+    const counts = {};
+    for (const type of ['husk', 'spitter', 'hound', 'warden', 'floater']) {
+      counts[type] = {
+        idle: s[type]?.idle?.length,
+        walk: s[type]?.walk?.length,
+        attack: s[type]?.attack?.length,
+        pain: s[type]?.pain?.length,
+        death: s[type]?.death?.length
+      };
+    }
+    counts.boss = { drill: s.boss?.drill?.length };
+    return counts;
+  });
+  for (const type of ['husk', 'spitter', 'hound', 'warden', 'floater']) {
+    expect(result[type].idle).toBe(2);
+    expect(result[type].walk).toBe(4);
+    expect(result[type].attack).toBe(3);
+    expect(result[type].pain).toBe(1);
+    expect(result[type].death).toBe(5);
+  }
+  expect(result.boss.drill).toBe(3);
+});
+
+test('sprite frames are correct size and <= 16 colors', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const issues = [];
+    const s = window.__IH.spriteCanvases;
+    for (const [name, anims] of Object.entries(s)) {
+      const expectedSize = name === 'boss' ? 128 : 64;
+      for (const [anim, frames] of Object.entries(anims)) {
+        for (let i = 0; i < frames.length; i++) {
+          const cv = frames[i];
+          if (cv.width !== expectedSize || cv.height !== expectedSize) {
+            issues.push({ name, anim, frame: i, w: cv.width, h: cv.height, expected: expectedSize });
+          }
+          // Count colors
+          const ctx = cv.getContext('2d');
+          const data = ctx.getImageData(0, 0, cv.width, cv.height).data;
+          const colors = new Set();
+          for (let p = 0; p < data.length; p += 4) {
+            if (data[p+3] === 0) continue;
+            colors.add(`${data[p]},${data[p+1]},${data[p+2]}`);
+          }
+          if (colors.size > 16) {
+            issues.push({ name, anim, frame: i, colorCount: colors.size });
+          }
+        }
+      }
+    }
+    return issues;
+  });
+  expect(result).toEqual([]);
+});
+
+test('sprites have outline color #120a08', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const s = window.__IH.spriteCanvases;
+    const missing = [];
+    for (const [name, anims] of Object.entries(s)) {
+      // Check first idle frame
+      const frames = anims.idle || anims.drill;
+      if (!frames || !frames[0]) continue;
+      const cv = frames[0];
+      const ctx = cv.getContext('2d');
+      const data = ctx.getImageData(0, 0, cv.width, cv.height).data;
+      let hasOutline = false;
+      for (let p = 0; p < data.length; p += 4) {
+        if (data[p] === 18 && data[p+1] === 10 && data[p+2] === 8 && data[p+3] > 0) {
+          hasOutline = true; break;
+        }
+      }
+      if (!hasOutline) missing.push(name);
+    }
+    return missing;
+  });
+  expect(result).toEqual([]);
+});
+
+test('silhouette distinctness: IoU < 0.6 for all enemy pairs', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const s = window.__IH.spriteCanvases;
+    const types = ['husk', 'spitter', 'hound', 'warden', 'floater'];
+    const masks = {};
+    for (const t of types) {
+      const cv = s[t].idle[0];
+      const ctx = cv.getContext('2d');
+      const data = ctx.getImageData(0, 0, 64, 64).data;
+      const mask = new Uint8Array(64*64);
+      for (let i = 0; i < 64*64; i++) {
+        mask[i] = data[i*4+3] > 0 ? 1 : 0;
+      }
+      masks[t] = mask;
+    }
+    const pairs = [];
+    for (let i = 0; i < types.length; i++) {
+      for (let j = i+1; j < types.length; j++) {
+        let inter = 0, union = 0;
+        for (let p = 0; p < 64*64; p++) {
+          const a = masks[types[i]][p], b = masks[types[j]][p];
+          if (a || b) union++;
+          if (a && b) inter++;
+        }
+        const iou = union > 0 ? inter / union : 0;
+        if (iou >= 0.6) pairs.push({ a: types[i], b: types[j], iou });
+      }
+    }
+    return pairs;
+  });
+  expect(result).toEqual([]);
+});
+
+test('Hound wider than tall; Warden tallest humanoid', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const s = window.__IH.spriteCanvases;
+    function getBBox(cv) {
+      const ctx = cv.getContext('2d');
+      const data = ctx.getImageData(0, 0, cv.width, cv.height).data;
+      let minX = cv.width, maxX = 0, minY = cv.height, maxY = 0;
+      for (let y = 0; y < cv.height; y++) {
+        for (let x = 0; x < cv.width; x++) {
+          if (data[(y*cv.width+x)*4+3] > 0) {
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return { w: maxX - minX + 1, h: maxY - minY + 1 };
+    }
+    const hound = getBBox(s.hound.idle[0]);
+    const warden = getBBox(s.warden.idle[0]);
+    const heights = {};
+    for (const t of ['husk', 'spitter', 'hound', 'warden', 'floater']) {
+      heights[t] = getBBox(s[t].idle[0]).h;
+    }
+    return { houndWider: hound.w > hound.h, wardenTallest: warden.h >= Math.max(heights.husk, heights.spitter, heights.hound, heights.floater), heights };
+  });
+  expect(result.houndWider).toBe(true);
+  expect(result.wardenTallest).toBe(true);
+});
+
+test('enemy stats unchanged after art overhaul', async ({ page }) => {
+  await page.goto(URL);
+  await startGame(page);
+  const result = await page.evaluate(() => {
+    // Check ENEMY_TYPES stats haven't changed
+    const types = window.__IH.ENEMY_TYPES;
+    return {
+      husk: { hp: types.h.hp, speed: types.h.speed, damage: types.h.damage },
+      spitter: { hp: types.s.hp, speed: types.s.speed, damage: types.s.damage },
+      hound: { hp: types.g.hp, speed: types.g.speed, damage: types.g.damage },
+      warden: { hp: types.w.hp, speed: types.w.speed, damage: types.w.damage },
+      floater: { hp: types.f.hp, speed: types.f.speed, damage: types.f.damage }
+    };
+  });
+  expect(result.husk).toEqual({ hp: 40, speed: 1.2, damage: 10 });
+  expect(result.spitter).toEqual({ hp: 30, speed: 1.5, damage: 8 });
+  expect(result.hound).toEqual({ hp: 25, speed: 3.0, damage: 12 });
+  expect(result.warden).toEqual({ hp: 80, speed: 1.0, damage: 15 });
+  expect(result.floater).toEqual({ hp: 50, speed: 2.0, damage: 10 });
+});
