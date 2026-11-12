@@ -162,19 +162,19 @@ const LEVELS = [
     secrets: 2,
     map: [
       "####################",
-      "#..............g...#",
-      "#..r.....s.........#",
+      "#..P...............#",
+      "#..r...............#",
       "#....####..........#",
-      "#..h.#..#..........#",
+      "#....#..#..........#",
       "#....#..R..........#",
-      "#....####..w.......#",
-      "#..........P.......#",
+      "#....####..........#",
       "#......+...........#",
       "#..................#",
-      "#..b.....f.........#",
+      "######D#############",
+      "#..b..........g..w.#",
       "#.......####.......#",
-      "#.......#..B.......#",
-      "#.......#..#.......#",
+      "#...s...#..B...f...#",
+      "#...h...#..#.......#",
       "S..D..H.#X.#......S#",
       "####################"
     ]
@@ -191,13 +191,13 @@ const LEVELS = [
       "#......~~~~........#",
       "#......~~~~........#",
       "#......~~~~........#",
-      "#...h..~~~~..s.....#",
+      "#......~~~~........#",
       "#..................#",
       "#.........r........#",
-      "######D#####.......#",
-      "#..............h...#",
+      "######D#############",
+      "#..h...........h...#",
       "#...p..............#",
-      "#..................#",
+      "#...............s..#",
       "#.....s............#",
       "#........####R#####",
       "#........#.........#",
@@ -219,11 +219,11 @@ const LEVELS = [
       "#..+...#.....s.....#",
       "####D####..........#",
       "#........#...####..#",
-      "#..h..g..#....r.#..#",
+      "#........#....r.#..#",
       "#........D......#..#",
       "#........#...####..#",
       "####R#####.........#",
-      "#..........s...h...#",
+      "#..h..g....s...h...#",
       "#....H.............#",
       "#......b.......g...#",
       "#..................#",
@@ -241,14 +241,14 @@ const LEVELS = [
       "####################",
       "#.P................#",
       "#..+...............#",
-      "#......h...........#",
+      "#..................#",
       "#.........^........#",
       "#.........^........#",
-      "#..s......^....w...#",
+      "#.........^........#",
       "#.........^........#",
       "####D##############",
-      "#..................#",
-      "#...g......h.......#",
+      "#..s...............#",
+      "#...g..h...h...w...#",
       "#..................#",
       "#........^####.....#",
       "#........^#..R.....#",
@@ -267,18 +267,18 @@ const LEVELS = [
     map: [
       "####################",
       "#..................#",
-      "#..................#",
-      "#..................#",
-      "#..................#",
       "#...P..............#",
       "#..................#",
       "#..................#",
       "#..................#",
-      "#........h.........#",
       "#..................#",
+      "#..................#",
+      "#........##........#",
+      "#..................#",
+      "#..................#",
+      "#........##........#",
+      "#.............h....#",
       "#...........s......#",
-      "#..................#",
-      "#..................#",
       "#..................#",
       "#..................#",
       "#..................#",
@@ -454,9 +454,9 @@ function updateEnemies(dt) {
     const dy = targetY - e.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    // Idle: check for line of sight to player
+    // Idle: check for line of sight to player (skip during grace period)
     if (e.state === 'idle') {
-      if (hasLineOfSight(e.x, e.y, player.x, player.y) && dist < 12) {
+      if (graceTimer <= 0 && hasLineOfSight(e.x, e.y, player.x, player.y) && dist < 12) {
         e.state = 'alert';
       }
       continue;
@@ -475,8 +475,8 @@ function updateEnemies(dt) {
         if (e.attackCooldown <= 0) {
           e.attackCooldown = e.attackRate;
           if (e.target === null) {
-            // Attack player
-            if (hasLineOfSight(e.x, e.y, player.x, player.y)) {
+            // Attack player (skip during grace period)
+            if (graceTimer <= 0 && hasLineOfSight(e.x, e.y, player.x, player.y)) {
               player.health -= e.damage;
               damageFlash = 0.3;
               screenShake = 3;
@@ -643,8 +643,8 @@ function updateBoss(dt) {
     const nx = boss.x + boss.chargeDir.x * speed * dt;
     const ny = boss.y + boss.chargeDir.y * speed * dt;
     if (!isSolid(nx, ny)) { boss.x = nx; boss.y = ny; }
-    // Melee damage on contact
-    if (dist < 1.5) {
+    // Melee damage on contact (skip during grace period)
+    if (graceTimer <= 0 && dist < 1.5) {
       player.health -= 15 * dt;
       damageFlash = 0.15;
     }
@@ -653,13 +653,13 @@ function updateBoss(dt) {
     boss.beamAngle += dt * 1.5;
     if (boss.attackTimer <= 0) {
       boss.attackTimer = 0.1;
-      // Check if beam hits player
+      // Check if beam hits player (skip during grace period)
       const beamDir = boss.beamAngle % (Math.PI * 2);
       const toPlayer = Math.atan2(dy, dx);
       let diff = beamDir - toPlayer;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      if (Math.abs(diff) < 0.2 && dist < 15) {
+      if (graceTimer <= 0 && Math.abs(diff) < 0.2 && dist < 15) {
         player.health -= 3;
         damageFlash = 0.15;
         screenShake = 2;
@@ -677,10 +677,10 @@ function updateBoss(dt) {
       bossOrbs.splice(i, 1);
       continue;
     }
-    // Hit player
+    // Hit player (skip during grace period)
     const pdx = orb.x - player.x;
     const pdy = orb.y - player.y;
-    if (pdx * pdx + pdy * pdy < 0.5) {
+    if (graceTimer <= 0 && pdx * pdx + pdy * pdy < 0.5) {
       player.health -= 8;
       damageFlash = 0.2;
       bossOrbs.splice(i, 1);
@@ -1003,6 +1003,7 @@ let phaseSuitTimer = 0;
 
 // ========== LEVEL STATS ==========
 let currentLevelIndex = 0;
+let graceTimer = 3.0;
 let levelStats = {
   kills: 0,
   totalEnemies: 0,
@@ -1374,6 +1375,7 @@ function loadLevel(idx) {
 
   gameState = 'playing';
   automapVisible = false;
+  graceTimer = 3.0;
 
   // Spawn boss on level 4 (The Bore)
   boss.active = false;
@@ -1988,6 +1990,7 @@ function gameLoop(time) {
   lastTime = time;
 
   if (gameState === 'playing') {
+    if (graceTimer > 0) graceTimer -= dt;
     movePlayer(dt);
     updateDoors(dt);
     updateEnemies(dt);
@@ -2180,6 +2183,8 @@ window.__IH = {
   set automapVisible(v) { automapVisible = v; },
   get phaseSuitTimer() { return phaseSuitTimer; },
   set phaseSuitTimer(v) { phaseSuitTimer = v; },
+  get graceTimer() { return graceTimer; },
+  set graceTimer(v) { graceTimer = v; },
   boss,
   updateBossPhase,
   audio,

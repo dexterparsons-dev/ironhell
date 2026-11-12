@@ -657,3 +657,84 @@ test('600 frames per level with 20 enemies: mean frame < 16ms', async ({ page })
     expect(r.meanMs).toBeLessThan(16);
   }
 });
+
+// ===== IH-11: Safe start =====
+
+test('all enemies start idle on every level', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    const issues = [];
+    for (let i = 0; i < window.__IH.levels.length; i++) {
+      window.__IH.loadLevel(i);
+      for (const e of window.__IH.enemies) {
+        if (e.state !== 'idle') {
+          issues.push({ level: i, type: e.type, state: e.state });
+        }
+      }
+    }
+    return issues;
+  });
+  expect(result).toEqual([]);
+});
+
+test('no enemy within 8 cells of player start or with LOS to start', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    const issues = [];
+    for (let i = 0; i < window.__IH.levels.length; i++) {
+      window.__IH.loadLevel(i);
+      const px = window.__IH.player.x;
+      const py = window.__IH.player.y;
+      for (const e of window.__IH.enemies) {
+        const dx = e.x - px;
+        const dy = e.y - py;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 8) {
+          issues.push({ level: i, type: e.type, dist, reason: 'too close' });
+        }
+        if (window.__IH.hasLineOfSight(e.x, e.y, px, py)) {
+          issues.push({ level: i, type: e.type, reason: 'has LOS' });
+        }
+      }
+    }
+    return issues;
+  });
+  expect(result).toEqual([]);
+});
+
+test('standing still after load, health unchanged on each level', async ({ page }) => {
+  await page.goto(URL);
+
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate((idx) => {
+      window.__IH.loadLevel(idx);
+      window.__IH.state = 'playing';
+      window.__IH.player.health = 100;
+    }, i);
+    await page.waitForTimeout(2000);
+    const health = await page.evaluate(() => window.__IH.player.health);
+    expect(health, `Level ${i}: health should be 100 after 2s`).toBe(100);
+  }
+}, 60000);
+
+test('enemy count per level within 10% of baseline', async ({ page }) => {
+  await page.goto(URL);
+  // Baseline counts before IH-11 changes
+  const baselines = [5, 4, 7, 6, 2];
+
+  const counts = await page.evaluate(() => {
+    return window.__IH.levels.map((_, i) => {
+      window.__IH.loadLevel(i);
+      return window.__IH.enemies.length;
+    });
+  });
+
+  for (let i = 0; i < 5; i++) {
+    const diff = Math.abs(counts[i] - baselines[i]) / baselines[i];
+    expect(diff, `Level ${i}: ${counts[i]} vs baseline ${baselines[i]}`).toBeLessThanOrEqual(0.1);
+  }
+});
