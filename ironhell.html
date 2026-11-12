@@ -826,6 +826,68 @@ let automapVisible = false;
 
 document.addEventListener('keydown', e => {
   keysDown[e.code] = true;
+
+  // ===== Title screen =====
+  if (gameState === 'title') {
+    if (e.code === 'Enter') {
+      gameState = 'difficultySelect';
+    }
+    return;
+  }
+
+  // ===== Difficulty select =====
+  if (gameState === 'difficultySelect') {
+    if (e.code === 'ArrowUp') {
+      difficultySelectIndex = (difficultySelectIndex - 1 + DIFFICULTIES.length) % DIFFICULTIES.length;
+    } else if (e.code === 'ArrowDown') {
+      difficultySelectIndex = (difficultySelectIndex + 1) % DIFFICULTIES.length;
+    } else if (e.code === 'Enter') {
+      setDifficulty(difficultySelectIndex);
+      loadLevel(0);
+      gameState = 'playing';
+    }
+    return;
+  }
+
+  // ===== Pause menu =====
+  if (gameState === 'paused') {
+    if (e.code === 'Escape') {
+      gameState = 'playing';
+      return;
+    }
+    if (e.code === 'ArrowUp') {
+      pauseMenuIndex = (pauseMenuIndex - 1 + 3) % 3;
+    } else if (e.code === 'ArrowDown') {
+      pauseMenuIndex = (pauseMenuIndex + 1) % 3;
+    } else if (e.code === 'Enter') {
+      if (pauseMenuIndex === 0) { // Resume
+        gameState = 'playing';
+      } else if (pauseMenuIndex === 1) { // Restart Level
+        loadLevel(currentLevelIndex);
+        gameState = 'playing';
+      } else if (pauseMenuIndex === 2) { // Quit to Title
+        gameState = 'title';
+      }
+    }
+    return;
+  }
+
+  // ===== Game Over =====
+  if (gameState === 'gameOver') {
+    if (e.code === 'Enter') {
+      loadLevel(currentLevelIndex);
+      gameState = 'playing';
+    }
+    return;
+  }
+
+  // ===== Playing state =====
+  if (e.code === 'Escape' && gameState === 'playing') {
+    gameState = 'paused';
+    pauseMenuIndex = 0;
+    return;
+  }
+
   if (e.code === 'KeyE') usePressed = true;
   // Weapon switching with number keys
   if (e.code >= 'Digit1' && e.code <= 'Digit6') {
@@ -846,6 +908,16 @@ document.addEventListener('keydown', e => {
   }
   // Enter to continue from level complete / stats screen
   if (e.code === 'Enter' && gameState === 'levelStats') {
+    // Save progress
+    if (currentLevelIndex + 1 > saveData.highestLevel) {
+      saveData.highestLevel = currentLevelIndex + 1;
+    }
+    const levelName = LEVELS[currentLevelIndex].name;
+    if (!saveData.bestTimes[levelName] || levelStats.elapsedTime < saveData.bestTimes[levelName]) {
+      saveData.bestTimes[levelName] = levelStats.elapsedTime;
+    }
+    writeSaveData();
+
     if (currentLevelIndex + 1 < LEVELS.length) {
       loadLevel(currentLevelIndex + 1);
     } else {
@@ -873,8 +945,49 @@ document.addEventListener('wheel', e => {
 const canvas = document.getElementById('c');
 canvas.addEventListener('click', () => { canvas.requestPointerLock(); });
 
+// ========== DIFFICULTIES ==========
+const DIFFICULTIES = [
+  { name: 'Easy', damageMultiplier: 0.5, speedMultiplier: 0.8, countMultiplier: 0.8 },
+  { name: 'Normal', damageMultiplier: 1.0, speedMultiplier: 1.0, countMultiplier: 1.0 },
+  { name: 'Hard', damageMultiplier: 1.5, speedMultiplier: 1.2, countMultiplier: 1.3 },
+  { name: 'Nightmare', damageMultiplier: 2.0, speedMultiplier: 1.5, countMultiplier: 1.5 }
+];
+let currentDifficulty = DIFFICULTIES[1]; // Normal by default
+let difficultySelectIndex = 1;
+let pauseMenuIndex = 0;
+
+function setDifficulty(index) {
+  if (index >= 0 && index < DIFFICULTIES.length) {
+    currentDifficulty = DIFFICULTIES[index];
+    difficultySelectIndex = index;
+  }
+}
+
+// ========== SAVE DATA ==========
+let saveData = { highestLevel: 0, bestTimes: {} };
+
+function loadSaveData() {
+  try {
+    const raw = localStorage.getItem('ironhell_save');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        saveData = parsed;
+      }
+    }
+  } catch (e) { /* localStorage unavailable */ }
+}
+
+function writeSaveData() {
+  try {
+    localStorage.setItem('ironhell_save', JSON.stringify(saveData));
+  } catch (e) { /* localStorage unavailable */ }
+}
+
+loadSaveData();
+
 // ========== PLAYER ==========
-let gameState = 'playing';
+let gameState = 'title';
 
 const player = {
   x: startX,
@@ -1270,8 +1383,8 @@ function loadLevel(idx) {
   }
 }
 
-// Load level 0 on start
-loadLevel(0);
+// Don't auto-load level; game starts in 'title' state
+// loadLevel(0) is called when difficulty is selected
 
 // ========== RENDER ==========
 const ctx = (() => {
@@ -1768,6 +1881,69 @@ function render() {
   // CRT filter overlay (before game state overlays so they appear on top)
   renderCRT();
 
+  // Title screen
+  if (gameState === 'title') {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f80';
+    ctx.font = '24px monospace';
+    ctx.fillText('IRONHELL', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#888';
+    ctx.font = '10px monospace';
+    ctx.fillText('Press Enter', W / 2, H / 2 + 20);
+    ctx.textAlign = 'start';
+  }
+
+  // Difficulty select screen
+  if (gameState === 'difficultySelect') {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f80';
+    ctx.font = '16px monospace';
+    ctx.fillText('SELECT DIFFICULTY', W / 2, 40);
+    ctx.font = '10px monospace';
+    for (let i = 0; i < DIFFICULTIES.length; i++) {
+      ctx.fillStyle = i === difficultySelectIndex ? '#ff0' : '#888';
+      const prefix = i === difficultySelectIndex ? '> ' : '  ';
+      ctx.fillText(prefix + DIFFICULTIES[i].name, W / 2, 80 + i * 24);
+    }
+    ctx.textAlign = 'start';
+  }
+
+  // Pause menu
+  if (gameState === 'paused') {
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff0';
+    ctx.font = '16px monospace';
+    ctx.fillText('PAUSED', W / 2, 50);
+    const pauseItems = ['Resume', 'Restart Level', 'Quit to Title'];
+    ctx.font = '10px monospace';
+    for (let i = 0; i < pauseItems.length; i++) {
+      ctx.fillStyle = i === pauseMenuIndex ? '#ff0' : '#888';
+      const prefix = i === pauseMenuIndex ? '> ' : '  ';
+      ctx.fillText(prefix + pauseItems[i], W / 2, 90 + i * 24);
+    }
+    ctx.textAlign = 'start';
+  }
+
+  // Game Over screen
+  if (gameState === 'gameOver') {
+    ctx.fillStyle = 'rgba(128,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f44';
+    ctx.font = '20px monospace';
+    ctx.fillText('GAME OVER', W / 2, H / 2 - 10);
+    ctx.fillStyle = '#888';
+    ctx.font = '10px monospace';
+    ctx.fillText('Press Enter to restart', W / 2, H / 2 + 20);
+    ctx.textAlign = 'start';
+  }
+
   // Victory screen
   if (gameState === 'victory') {
     ctx.fillStyle = 'rgba(0,0,0,0.9)';
@@ -1811,10 +1987,18 @@ function gameLoop(time) {
   const dt = Math.min((time - lastTime) / 1000, 0.05);
   lastTime = time;
 
-  movePlayer(dt);
-  updateDoors(dt);
-  updateEnemies(dt);
-  updateBoss(dt);
+  if (gameState === 'playing') {
+    movePlayer(dt);
+    updateDoors(dt);
+    updateEnemies(dt);
+    updateBoss(dt);
+
+    // Check for game over
+    if (player.health <= 0) {
+      player.health = 0;
+      gameState = 'gameOver';
+    }
+  }
 
   // Weapon updates
   if (fireCooldown > 0) fireCooldown -= dt;
@@ -2001,7 +2185,11 @@ window.__IH = {
   audio,
   get crt() { return crt; },
   set crt(v) { crt = v; },
-  playSound
+  playSound,
+  DIFFICULTIES,
+  get difficulty() { return currentDifficulty; },
+  setDifficulty,
+  get saveData() { return saveData; }
 };
 
 </script>

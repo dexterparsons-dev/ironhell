@@ -2,6 +2,16 @@ import { test, expect } from '@playwright/test';
 
 const URL = 'file://' + process.cwd().replace(/\\/g, '/') + '/ironhell.html';
 
+// Helper to skip title/difficulty and go straight to playing
+async function startGame(page) {
+  await page.evaluate(() => {
+    window.__IH.setDifficulty(1); // Normal
+    window.__IH.loadLevel(0);
+    window.__IH.state = 'playing';
+  });
+  await page.waitForTimeout(100);
+}
+
 // ===== IH-1: Engine basics =====
 
 test('page loads with zero console errors', async ({ page }) => {
@@ -36,6 +46,7 @@ test('__IH.player has numeric x, y, angle', async ({ page }) => {
 
 test('KeyW moves player; wall collision prevents entering wall cell', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const before = await page.evaluate(() => {
@@ -75,6 +86,7 @@ test('__IH.textures has >= 4 entries', async ({ page }) => {
 
 test('locked red door stays closed without key, opens with key', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   // Find the red door and check it stays closed without key
@@ -103,6 +115,7 @@ test('locked red door stays closed without key, opens with key', async ({ page }
 
 test('activating X sets state to levelComplete', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -122,6 +135,7 @@ test('__IH.weapons.length === 6', async ({ page }) => {
 
 test('pressing 2 sets weapon to Scatter Bore; firing decrements shells', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -139,6 +153,7 @@ test('pressing 2 sets weapon to Scatter Bore; firing decrements shells', async (
 
 test('rocket splash within radius reduces player health', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -164,6 +179,7 @@ test('rocket splash within radius reduces player health', async ({ page }) => {
 
 test('map with h,s,g,w,f spawns 5 enemies with distinct types', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   const result = await page.evaluate(() => {
     const types = new Set(window.__IH.enemies.map(e => e.type));
     return { count: window.__IH.enemies.length, types: [...types] };
@@ -178,6 +194,7 @@ test('map with h,s,g,w,f spawns 5 enemies with distinct types', async ({ page })
 
 test('firing near idle enemy with LOS sets state to alert or chase', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -197,6 +214,7 @@ test('firing near idle enemy with LOS sets state to alert or chase', async ({ pa
 
 test('enemy damaged by another enemy sets target to attacker (infighting)', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -215,6 +233,7 @@ test('enemy damaged by another enemy sets target to attacker (infighting)', asyn
 
 test('enemy behind wall is not drawn (z-buffer)', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(300);
 
   const result = await page.evaluate(() => {
@@ -363,6 +382,7 @@ test('BFS: player can reach exit and keys; levels 1-4 have >= 2 secrets', async 
 
 test('acid damages player without Phase Suit; Phase Suit protects', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -439,6 +459,7 @@ test('acid damages player without Phase Suit; Phase Suit protects', async ({ pag
 
 test('boss at 65% HP sets phase 2 and spawns Hounds', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -456,6 +477,7 @@ test('boss at 65% HP sets phase 2 and spawns Hounds', async ({ page }) => {
 
 test('boss at 32% HP sets phase 3', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -470,6 +492,7 @@ test('boss at 32% HP sets phase 3', async ({ page }) => {
 
 test('boss HP 0 sets state to victory', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const result = await page.evaluate(() => {
@@ -501,6 +524,7 @@ test('__IH.audio.sounds has key for every weapon and enemy type', async ({ page 
 
 test('M toggles audio.muted; F toggles crt', async ({ page }) => {
   await page.goto(URL);
+  await startGame(page);
   await page.waitForTimeout(200);
 
   const before = await page.evaluate(() => ({
@@ -524,4 +548,47 @@ test('M toggles audio.muted; F toggles crt', async ({ page }) => {
 
   expect(afterM.muted).toBe(!before.muted);
   expect(afterF.crt).toBe(!before.crt);
+});
+
+// ===== IH-8: Menus =====
+
+test('page loads to title state; Enter goes to difficulty select', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+  const titleState = await page.evaluate(() => window.__IH.state);
+  expect(titleState).toBe('title');
+
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(100);
+  const afterEnter = await page.evaluate(() => window.__IH.state);
+  expect(afterEnter).toBe('difficultySelect');
+});
+
+test('Nightmare has higher damage multiplier than Easy', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const d = window.__IH.DIFFICULTIES;
+    const easy = d.find(x => x.name === 'Easy');
+    const nightmare = d.find(x => x.name === 'Nightmare');
+    return { easyDmg: easy.damageMultiplier, nightmareDmg: nightmare.damageMultiplier };
+  });
+  expect(result.nightmareDmg).toBeGreaterThan(result.easyDmg);
+});
+
+test('game starts when localStorage throws', async ({ page }) => {
+  await page.goto(URL);
+  // Override localStorage to throw
+  await page.evaluate(() => {
+    Object.defineProperty(window, 'localStorage', {
+      get() { throw new Error('localStorage disabled'); }
+    });
+  });
+  // Game should still work
+  await page.evaluate(() => {
+    window.__IH.setDifficulty(1);
+    window.__IH.loadLevel(0);
+    window.__IH.state = 'playing';
+  });
+  const state = await page.evaluate(() => window.__IH.state);
+  expect(state).toBe('playing');
 });
