@@ -64,3 +64,50 @@ test('KeyW moves player; wall collision prevents entering wall cell', async ({ p
   });
   expect(inWall).toBe(false);
 });
+
+// ===== IH-2: Textures, doors, keycards, exit =====
+
+test('__IH.textures has >= 4 entries', async ({ page }) => {
+  await page.goto(URL);
+  const count = await page.evaluate(() => Object.keys(window.__IH.textures).length);
+  expect(count).toBeGreaterThanOrEqual(4);
+});
+
+test('locked red door stays closed without key, opens with key', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  // Find the red door and check it stays closed without key
+  const closedWithoutKey = await page.evaluate(() => {
+    const door = window.__IH.doors.find(d => d.locked === 'red');
+    if (!door) return { found: false };
+    // Player does not have red key
+    const hasKey = window.__IH.player.keys.includes('red');
+    // Try to open door
+    window.__IH.tryUseDoor(door);
+    return { found: true, hasKey, opening: door.opening, open: door.open };
+  });
+  expect(closedWithoutKey.found).toBe(true);
+  expect(closedWithoutKey.hasKey).toBe(false);
+  expect(closedWithoutKey.opening).toBe(false);
+
+  // Give player the red key and try again
+  const openedWithKey = await page.evaluate(() => {
+    window.__IH.player.keys.push('red');
+    const door = window.__IH.doors.find(d => d.locked === 'red');
+    window.__IH.tryUseDoor(door);
+    return { opening: door.opening };
+  });
+  expect(openedWithKey.opening).toBe(true);
+});
+
+test('activating X sets state to levelComplete', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    window.__IH.activateExit();
+    return window.__IH.state;
+  });
+  expect(result).toBe('levelComplete');
+});

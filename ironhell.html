@@ -24,74 +24,201 @@ const RUN_MULT = 1.8;
 const ROT_SPEED = 0.003;
 const PLAYER_RADIUS = 0.2;
 const MAX_DEPTH = 20;
-const TILE = 1;
+const TEX_SIZE = 64;
+const DOOR_SPEED = 2.0;
+
+// ========== TEXTURES ==========
+const textures = {};
+
+function createTexture(name, drawFn) {
+  const cv = document.createElement('canvas');
+  cv.width = TEX_SIZE; cv.height = TEX_SIZE;
+  const tc = cv.getContext('2d');
+  drawFn(tc, TEX_SIZE);
+  textures[name] = tc.getImageData(0, 0, TEX_SIZE, TEX_SIZE).data;
+}
+
+function seededRand(seed) {
+  let s = seed;
+  return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return (s >> 16) / 32767; };
+}
+
+createTexture('rustyMetal', (tc, S) => {
+  const rng = seededRand(42);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const v = 80 + rng() * 60;
+    const rust = rng() > 0.7 ? 30 : 0;
+    tc.fillStyle = `rgb(${v + rust},${v - 10},${v - 20})`;
+    tc.fillRect(x, y, 1, 1);
+  }
+  // Rivets
+  for (let ry = 4; ry < S; ry += 16) for (let rx = 4; rx < S; rx += 16) {
+    tc.fillStyle = '#555';
+    tc.beginPath(); tc.arc(rx, ry, 2, 0, Math.PI * 2); tc.fill();
+  }
+});
+
+createTexture('concrete', (tc, S) => {
+  const rng = seededRand(99);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const v = 100 + rng() * 40;
+    tc.fillStyle = `rgb(${v},${v},${v + 5})`;
+    tc.fillRect(x, y, 1, 1);
+  }
+  // Cracks
+  tc.strokeStyle = '#666'; tc.lineWidth = 1;
+  tc.beginPath(); tc.moveTo(10, 0); tc.lineTo(30, 32); tc.lineTo(20, 64); tc.stroke();
+});
+
+createTexture('techPanel', (tc, S) => {
+  tc.fillStyle = '#334'; tc.fillRect(0, 0, S, S);
+  tc.fillStyle = '#445'; tc.fillRect(4, 4, S - 8, S - 8);
+  tc.fillStyle = '#0a0'; tc.fillRect(20, 20, 8, 8);
+  tc.fillStyle = '#a00'; tc.fillRect(36, 20, 8, 8);
+  // Horizontal lines
+  for (let y = 10; y < S; y += 12) {
+    tc.strokeStyle = '#556'; tc.lineWidth = 1;
+    tc.beginPath(); tc.moveTo(4, y); tc.lineTo(S - 4, y); tc.stroke();
+  }
+});
+
+createTexture('door', (tc, S) => {
+  tc.fillStyle = '#654'; tc.fillRect(0, 0, S, S);
+  tc.fillStyle = '#543'; tc.fillRect(2, 2, S - 4, S / 2 - 4);
+  tc.fillStyle = '#543'; tc.fillRect(2, S / 2 + 2, S - 4, S / 2 - 4);
+  tc.fillStyle = '#876'; tc.fillRect(S - 14, S / 2 - 4, 6, 8);
+});
+
+createTexture('doorRed', (tc, S) => {
+  tc.fillStyle = '#822'; tc.fillRect(0, 0, S, S);
+  tc.fillStyle = '#a33'; tc.fillRect(2, 2, S - 4, S - 4);
+  tc.fillStyle = '#f44'; tc.fillRect(S / 2 - 8, S / 2 - 8, 16, 16);
+  tc.fillStyle = '#faa'; tc.fillRect(S / 2 - 4, S / 2 - 4, 8, 8);
+});
+
+createTexture('doorBlue', (tc, S) => {
+  tc.fillStyle = '#228'; tc.fillRect(0, 0, S, S);
+  tc.fillStyle = '#33a'; tc.fillRect(2, 2, S - 4, S - 4);
+  tc.fillStyle = '#44f'; tc.fillRect(S / 2 - 8, S / 2 - 8, 16, 16);
+  tc.fillStyle = '#aaf'; tc.fillRect(S / 2 - 4, S / 2 - 4, 8, 8);
+});
+
+createTexture('doorYellow', (tc, S) => {
+  tc.fillStyle = '#882'; tc.fillRect(0, 0, S, S);
+  tc.fillStyle = '#aa3'; tc.fillRect(2, 2, S - 4, S - 4);
+  tc.fillStyle = '#ff4'; tc.fillRect(S / 2 - 8, S / 2 - 8, 16, 16);
+  tc.fillStyle = '#ffa'; tc.fillRect(S / 2 - 4, S / 2 - 4, 8, 8);
+});
+
+createTexture('exitSwitch', (tc, S) => {
+  tc.fillStyle = '#333'; tc.fillRect(0, 0, S, S);
+  tc.fillStyle = '#444'; tc.fillRect(4, 4, S - 8, S - 8);
+  tc.fillStyle = '#0f0'; tc.fillRect(S / 2 - 10, S / 2 - 10, 20, 20);
+  tc.strokeStyle = '#fff'; tc.lineWidth = 2;
+  tc.strokeRect(S / 2 - 10, S / 2 - 10, 20, 20);
+  // "EXIT" text approximation
+  tc.fillStyle = '#000';
+  tc.fillRect(S / 2 - 6, S / 2 - 4, 12, 8);
+  tc.fillStyle = '#0f0';
+  tc.fillRect(S / 2 - 4, S / 2 - 2, 8, 4);
+});
+
+// Wall type to texture mapping
+const WALL_TEXTURES = { 1: 'rustyMetal', 2: 'concrete', 3: 'techPanel' };
 
 // ========== MAP ==========
 const MAP_DATA = [
   "################",
   "#..............#",
-  "#..............#",
+  "#..r...........#",
   "#....####......#",
   "#....#..#......#",
-  "#....#..#......#",
+  "#....#..R......#",
   "#....####......#",
   "#..............#",
   "#......P.......#",
   "#..............#",
-  "#..............#",
+  "#..b...........#",
   "#.......####...#",
+  "#.......#..B...#",
   "#.......#..#...#",
-  "#.......#..#...#",
-  "#.......####...#",
+  "#..D....#X.#...#",
   "################"
 ];
 
 const mapW = MAP_DATA[0].length;
 const mapH = MAP_DATA.length;
 const map = [];
+const doors = [];
 let startX = 8.5, startY = 8.5;
+
+// Cell types: 0=floor, 1=wall(rusty), 2=wall(concrete), 3=wall(tech),
+// 10=door, 11=redDoor, 12=blueDoor, 13=yellowDoor, 20=exit
+// Items on floor: stored separately
+const floorItems = [];
 
 for (let y = 0; y < mapH; y++) {
   map[y] = [];
   for (let x = 0; x < mapW; x++) {
     const ch = MAP_DATA[y][x];
-    if (ch === 'P') {
-      startX = x + 0.5;
-      startY = y + 0.5;
-      map[y][x] = 0;
-    } else if (ch === '#') {
-      map[y][x] = 1;
-    } else {
-      map[y][x] = 0;
+    switch (ch) {
+      case 'P': startX = x + 0.5; startY = y + 0.5; map[y][x] = 0; break;
+      case '#': map[y][x] = 1; break;
+      case 'D': map[y][x] = 10; doors.push({ x, y, type: 'door', open: 0, opening: false, locked: null }); break;
+      case 'R': map[y][x] = 11; doors.push({ x, y, type: 'doorRed', open: 0, opening: false, locked: 'red' }); break;
+      case 'B': map[y][x] = 12; doors.push({ x, y, type: 'doorBlue', open: 0, opening: false, locked: 'blue' }); break;
+      case 'Y': map[y][x] = 13; doors.push({ x, y, type: 'doorYellow', open: 0, opening: false, locked: 'yellow' }); break;
+      case 'X': map[y][x] = 20; break;
+      case 'r': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_red', picked: false }); break;
+      case 'b': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_blue', picked: false }); break;
+      case 'y': map[y][x] = 0; floorItems.push({ x: x + 0.5, y: y + 0.5, type: 'key_yellow', picked: false }); break;
+      default: map[y][x] = 0; break;
     }
   }
 }
 
-function isWall(x, y) {
+function getCell(x, y) {
   const mx = Math.floor(x);
   const my = Math.floor(y);
-  if (mx < 0 || mx >= mapW || my < 0 || my >= mapH) return true;
-  return map[my][mx] !== 0;
+  if (mx < 0 || mx >= mapW || my < 0 || my >= mapH) return 1;
+  return map[my][mx];
 }
 
-// ========== INPUT ==========
-const keys = {};
-let mouseDX = 0;
-
-document.addEventListener('keydown', e => { keys[e.code] = true; });
-document.addEventListener('keyup', e => { keys[e.code] = false; });
-document.addEventListener('mousemove', e => {
-  if (document.pointerLockElement) {
-    mouseDX += e.movementX;
+function isSolid(x, y) {
+  const cell = getCell(x, y);
+  if (cell >= 1 && cell <= 3) return true; // walls
+  if (cell === 20) return true; // exit switch wall
+  if (cell >= 10 && cell <= 13) {
+    // Door — check if fully open
+    const door = doors.find(d => d.x === Math.floor(x) && d.y === Math.floor(y));
+    if (door && door.open >= 0.9) return false;
+    return true;
   }
+  return false;
+}
+
+function isWall(x, y) { return isSolid(x, y); }
+
+// ========== INPUT ==========
+const keysDown = {};
+let mouseDX = 0;
+let usePressed = false;
+
+document.addEventListener('keydown', e => {
+  keysDown[e.code] = true;
+  if (e.code === 'KeyE') usePressed = true;
+});
+document.addEventListener('keyup', e => { keysDown[e.code] = false; });
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement) mouseDX += e.movementX;
 });
 
 const canvas = document.getElementById('c');
-canvas.addEventListener('click', () => {
-  canvas.requestPointerLock();
-});
+canvas.addEventListener('click', () => { canvas.requestPointerLock(); });
 
 // ========== PLAYER ==========
+let gameState = 'playing';
+
 const player = {
   x: startX,
   y: startY,
@@ -101,56 +228,116 @@ const player = {
   keys: []
 };
 
+function tryUseDoor(door) {
+  if (door.opening) return;
+  if (door.locked) {
+    if (!player.keys.includes(door.locked)) return;
+  }
+  door.opening = true;
+}
+
+function activateExit() {
+  gameState = 'levelComplete';
+}
+
+function handleUse() {
+  if (!usePressed) return;
+  usePressed = false;
+
+  const lookX = Math.cos(player.angle);
+  const lookY = Math.sin(player.angle);
+  const checkX = Math.floor(player.x + lookX * 1.2);
+  const checkY = Math.floor(player.y + lookY * 1.2);
+  const cell = getCell(player.x + lookX * 1.2, player.y + lookY * 1.2);
+
+  if (cell >= 10 && cell <= 13) {
+    const door = doors.find(d => d.x === checkX && d.y === checkY);
+    if (door) tryUseDoor(door);
+  }
+  if (cell === 20) {
+    activateExit();
+  }
+}
+
+function pickupItems() {
+  for (const item of floorItems) {
+    if (item.picked) continue;
+    const dx = player.x - item.x;
+    const dy = player.y - item.y;
+    if (dx * dx + dy * dy < 0.5) {
+      item.picked = true;
+      if (item.type === 'key_red' && !player.keys.includes('red')) player.keys.push('red');
+      if (item.type === 'key_blue' && !player.keys.includes('blue')) player.keys.push('blue');
+      if (item.type === 'key_yellow' && !player.keys.includes('yellow')) player.keys.push('yellow');
+    }
+  }
+}
+
+function updateDoors(dt) {
+  for (const door of doors) {
+    if (door.opening && door.open < 1) {
+      door.open = Math.min(1, door.open + DOOR_SPEED * dt);
+    }
+    // Auto-open doors when player walks into them
+    const dx = player.x - (door.x + 0.5);
+    const dy = player.y - (door.y + 0.5);
+    if (dx * dx + dy * dy < 1.5 && !door.opening) {
+      if (!door.locked || player.keys.includes(door.locked)) {
+        door.opening = true;
+      }
+    }
+  }
+}
+
 function movePlayer(dt) {
+  if (gameState !== 'playing') return;
+
   let mx = 0, my = 0;
   const cos = Math.cos(player.angle);
   const sin = Math.sin(player.angle);
 
-  if (keys['KeyW']) { mx += cos; my += sin; }
-  if (keys['KeyS']) { mx -= cos; my -= sin; }
-  if (keys['KeyA']) { mx += sin; my -= cos; }
-  if (keys['KeyD']) { mx -= sin; my += cos; }
+  if (keysDown['KeyW']) { mx += cos; my += sin; }
+  if (keysDown['KeyS']) { mx -= cos; my -= sin; }
+  if (keysDown['KeyA']) { mx += sin; my -= cos; }
+  if (keysDown['KeyD']) { mx -= sin; my += cos; }
 
   const len = Math.sqrt(mx * mx + my * my);
-  if (len > 0) {
-    mx /= len;
-    my /= len;
-  }
+  if (len > 0) { mx /= len; my /= len; }
 
   let speed = MOVE_SPEED;
-  if (keys['ShiftLeft'] || keys['ShiftRight']) speed *= RUN_MULT;
+  if (keysDown['ShiftLeft'] || keysDown['ShiftRight']) speed *= RUN_MULT;
 
   const dx = mx * speed * dt;
   const dy = my * speed * dt;
 
-  // Sliding collision
   const newX = player.x + dx;
   const newY = player.y + dy;
 
-  if (!isWall(newX + PLAYER_RADIUS * Math.sign(dx), player.y) &&
-      !isWall(newX - PLAYER_RADIUS * Math.sign(dx), player.y) &&
-      !isWall(newX, player.y + PLAYER_RADIUS) &&
-      !isWall(newX, player.y - PLAYER_RADIUS)) {
+  if (!isSolid(newX + PLAYER_RADIUS * Math.sign(dx), player.y) &&
+      !isSolid(newX - PLAYER_RADIUS * Math.sign(dx), player.y) &&
+      !isSolid(newX, player.y + PLAYER_RADIUS) &&
+      !isSolid(newX, player.y - PLAYER_RADIUS)) {
     player.x = newX;
   }
 
-  if (!isWall(player.x, newY + PLAYER_RADIUS * Math.sign(dy)) &&
-      !isWall(player.x, newY - PLAYER_RADIUS * Math.sign(dy)) &&
-      !isWall(player.x + PLAYER_RADIUS, newY) &&
-      !isWall(player.x - PLAYER_RADIUS, newY)) {
+  if (!isSolid(player.x, newY + PLAYER_RADIUS * Math.sign(dy)) &&
+      !isSolid(player.x, newY - PLAYER_RADIUS * Math.sign(dy)) &&
+      !isSolid(player.x + PLAYER_RADIUS, newY) &&
+      !isSolid(player.x - PLAYER_RADIUS, newY)) {
     player.y = newY;
   }
 
-  // Mouse look
   player.angle += mouseDX * ROT_SPEED;
   mouseDX = 0;
+
+  handleUse();
+  pickupItems();
 }
 
 // ========== RENDER ==========
 const ctx = (() => {
   canvas.width = W;
   canvas.height = H;
-  // Scale canvas to fill screen while maintaining aspect ratio
   function resize() {
     const scaleX = window.innerWidth / W;
     const scaleY = window.innerHeight / H;
@@ -165,6 +352,17 @@ const ctx = (() => {
 
 const imgData = ctx.createImageData(W, H);
 const buf = imgData.data;
+const zBuf = new Float32Array(W);
+
+function getTextureForCell(cell) {
+  if (cell >= 1 && cell <= 3) return textures[WALL_TEXTURES[cell]] || textures['rustyMetal'];
+  if (cell === 10) return textures['door'];
+  if (cell === 11) return textures['doorRed'];
+  if (cell === 12) return textures['doorBlue'];
+  if (cell === 13) return textures['doorYellow'];
+  if (cell === 20) return textures['exitSwitch'];
+  return textures['rustyMetal'];
+}
 
 function castRay(ox, oy, angle) {
   const dx = Math.cos(angle);
@@ -199,24 +397,66 @@ function castRay(ox, oy, angle) {
     }
 
     if (mapX < 0 || mapX >= mapW || mapY < 0 || mapY >= mapH) break;
-    if (map[mapY][mapX] !== 0) {
-      return { dist, side, mapX, mapY };
+    const cell = map[mapY][mapX];
+    if (cell !== 0) {
+      // Doors that are fully open don't block rays
+      if (cell >= 10 && cell <= 13) {
+        const door = doors.find(d => d.x === mapX && d.y === mapY);
+        if (door && door.open >= 0.9) continue;
+      }
+      // Compute wall hit X for texturing
+      let wallX;
+      if (side === 0) {
+        wallX = oy + dist * dy;
+      } else {
+        wallX = ox + dist * dx;
+      }
+      wallX -= Math.floor(wallX);
+      return { dist, side, mapX, mapY, cell, wallX };
     }
   }
 
-  return { dist: MAX_DEPTH, side: 0, mapX: 0, mapY: 0 };
+  return { dist: MAX_DEPTH, side: 0, mapX: 0, mapY: 0, cell: 0, wallX: 0 };
+}
+
+function sampleTexture(texData, u, v) {
+  const tx = Math.floor(u * TEX_SIZE) & (TEX_SIZE - 1);
+  const ty = Math.floor(v * TEX_SIZE) & (TEX_SIZE - 1);
+  const idx = (ty * TEX_SIZE + tx) * 4;
+  return [texData[idx], texData[idx + 1], texData[idx + 2]];
 }
 
 function render() {
-  // Clear to dark ceiling/floor
-  for (let i = 0; i < W * H * 4; i += 4) {
-    const y = Math.floor(i / 4 / W);
-    if (y < H / 2) {
-      // Ceiling - dark grey
-      buf[i] = 40; buf[i+1] = 40; buf[i+2] = 50; buf[i+3] = 255;
-    } else {
-      // Floor - dark brown
-      buf[i] = 60; buf[i+1] = 50; buf[i+2] = 40; buf[i+3] = 255;
+  // Floor and ceiling with distance shading
+  const halfH = H / 2;
+  for (let y = 0; y < H; y++) {
+    const isCeiling = y < halfH;
+    const rowDist = halfH / Math.abs(y - halfH + 0.01);
+    const fog = Math.max(0, Math.min(1, 1 - rowDist / MAX_DEPTH));
+
+    for (let x = 0; x < W; x++) {
+      const rayAngle = player.angle - FOV / 2 + (x / W) * FOV;
+      const floorX = player.x + rowDist * Math.cos(rayAngle);
+      const floorY = player.y + rowDist * Math.sin(rayAngle);
+
+      const idx = (y * W + x) * 4;
+
+      if (isCeiling) {
+        const cx = ((floorX * 4) & 7);
+        const cy = ((floorY * 4) & 7);
+        const checker = ((cx >> 2) ^ (cy >> 2)) ? 50 : 40;
+        buf[idx] = Math.floor(checker * fog);
+        buf[idx + 1] = Math.floor(checker * fog);
+        buf[idx + 2] = Math.floor((checker + 10) * fog);
+      } else {
+        const fx = ((floorX * 4) & 7);
+        const fy = ((floorY * 4) & 7);
+        const checker = ((fx >> 2) ^ (fy >> 2)) ? 70 : 55;
+        buf[idx] = Math.floor(checker * fog);
+        buf[idx + 1] = Math.floor((checker - 10) * fog);
+        buf[idx + 2] = Math.floor((checker - 20) * fog);
+      }
+      buf[idx + 3] = 255;
     }
   }
 
@@ -225,29 +465,87 @@ function render() {
     const rayAngle = player.angle - FOV / 2 + (col / W) * FOV;
     const hit = castRay(player.x, player.y, rayAngle);
 
-    // Fish-eye correction
     const perpDist = hit.dist * Math.cos(rayAngle - player.angle);
+    zBuf[col] = perpDist;
     const wallH = Math.min(H * 2, H / perpDist);
     const wallTop = Math.floor((H - wallH) / 2);
     const wallBot = Math.floor((H + wallH) / 2);
 
-    // Wall color - darker on Y side
     const shade = hit.side === 1 ? 0.7 : 1.0;
     const fog = Math.max(0, 1 - perpDist / MAX_DEPTH);
-    const r = Math.floor(150 * shade * fog);
-    const g = Math.floor(120 * shade * fog);
-    const b = Math.floor(100 * shade * fog);
+    const tex = getTextureForCell(hit.cell);
 
     for (let y = Math.max(0, wallTop); y < Math.min(H, wallBot); y++) {
+      const v = (y - wallTop) / (wallBot - wallTop);
       const idx = (y * W + col) * 4;
-      buf[idx] = r;
-      buf[idx+1] = g;
-      buf[idx+2] = b;
-      buf[idx+3] = 255;
+
+      if (tex) {
+        const [tr, tg, tb] = sampleTexture(tex, hit.wallX, v);
+        buf[idx] = Math.floor(tr * shade * fog);
+        buf[idx + 1] = Math.floor(tg * shade * fog);
+        buf[idx + 2] = Math.floor(tb * shade * fog);
+      } else {
+        buf[idx] = Math.floor(150 * shade * fog);
+        buf[idx + 1] = Math.floor(120 * shade * fog);
+        buf[idx + 2] = Math.floor(100 * shade * fog);
+      }
+      buf[idx + 3] = 255;
     }
   }
 
   ctx.putImageData(imgData, 0, 0);
+
+  // HUD: Draw held keys
+  const keyColors = { red: '#f44', blue: '#44f', yellow: '#ff4' };
+  let kx = W - 60;
+  ctx.font = '10px monospace';
+  for (const k of player.keys) {
+    ctx.fillStyle = keyColors[k] || '#fff';
+    ctx.fillRect(kx, 4, 16, 16);
+    ctx.fillStyle = '#000';
+    ctx.fillText(k[0].toUpperCase(), kx + 4, 15);
+    kx += 20;
+  }
+
+  // Level complete overlay
+  if (gameState === 'levelComplete') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#0f0';
+    ctx.font = '20px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('LEVEL COMPLETE', W / 2, H / 2);
+    ctx.textAlign = 'start';
+  }
+
+  // Draw floor items (keys as sprites)
+  for (const item of floorItems) {
+    if (item.picked) continue;
+    const dx = item.x - player.x;
+    const dy = item.y - player.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 0.3 || dist > MAX_DEPTH) continue;
+
+    const angle = Math.atan2(dy, dx) - player.angle;
+    let normAngle = angle;
+    while (normAngle > Math.PI) normAngle -= Math.PI * 2;
+    while (normAngle < -Math.PI) normAngle += Math.PI * 2;
+
+    if (Math.abs(normAngle) > FOV / 2 + 0.1) continue;
+
+    const screenX = Math.floor(W / 2 + normAngle / FOV * W);
+    const spriteH = Math.floor(H / dist * 0.3);
+    const spriteW = spriteH;
+    const sy = Math.floor(H / 2 + spriteH / 2);
+
+    if (dist < zBuf[Math.max(0, Math.min(W - 1, screenX))]) {
+      const color = item.type === 'key_red' ? '#f44' : item.type === 'key_blue' ? '#44f' : '#ff4';
+      ctx.fillStyle = color;
+      ctx.fillRect(screenX - spriteW / 2, sy - spriteH, spriteW, spriteH);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(screenX - 1, sy - spriteH + 2, 2, spriteH - 4);
+    }
+  }
 }
 
 // ========== LOOP ==========
@@ -261,9 +559,9 @@ function gameLoop(time) {
   lastTime = time;
 
   movePlayer(dt);
+  updateDoors(dt);
   render();
 
-  // FPS counter
   frameCount++;
   fpsTime += dt;
   if (fpsTime >= 1) {
@@ -279,13 +577,20 @@ requestAnimationFrame(gameLoop);
 
 // ========== DEBUG ==========
 window.__IH = {
-  get state() { return 'playing'; },
+  get state() { return gameState; },
+  set state(v) { gameState = v; },
   get player() { return player; },
   get map() { return map; },
   get mapData() { return MAP_DATA; },
   level: { map, mapW, mapH },
   enemies: [],
-  isWall
+  textures,
+  doors,
+  floorItems,
+  isWall,
+  isSolid,
+  tryUseDoor,
+  activateExit
 };
 
 </script>
