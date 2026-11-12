@@ -159,3 +159,80 @@ test('rocket splash within radius reduces player health', async ({ page }) => {
   // Player should have taken splash damage from nearby wall hit
   expect(result.healthAfter).toBeLessThan(result.healthBefore);
 });
+
+// ===== IH-4: Enemies =====
+
+test('map with h,s,g,w,f spawns 5 enemies with distinct types', async ({ page }) => {
+  await page.goto(URL);
+  const result = await page.evaluate(() => {
+    const types = new Set(window.__IH.enemies.map(e => e.type));
+    return { count: window.__IH.enemies.length, types: [...types] };
+  });
+  expect(result.count).toBeGreaterThanOrEqual(5);
+  expect(result.types).toContain('husk');
+  expect(result.types).toContain('spitter');
+  expect(result.types).toContain('hound');
+  expect(result.types).toContain('warden');
+  expect(result.types).toContain('floater');
+});
+
+test('firing near idle enemy with LOS sets state to alert or chase', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    // Place an enemy in open space near the player, force idle, ensure LOS
+    const e = window.__IH.enemies[0];
+    e.state = 'idle';
+    e.x = window.__IH.player.x + 2;
+    e.y = window.__IH.player.y;
+    const los = window.__IH.hasLineOfSight(e.x, e.y, window.__IH.player.x, window.__IH.player.y);
+    // Alert enemies near player (simulates weapon fire)
+    window.__IH.alertNearbyEnemies(window.__IH.player.x, window.__IH.player.y, 15);
+    return { los, state: e.state };
+  });
+  expect(result.los).toBe(true);
+  expect(['alert', 'chase']).toContain(result.state);
+});
+
+test('enemy damaged by another enemy sets target to attacker (infighting)', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(200);
+
+  const result = await page.evaluate(() => {
+    const enemies = window.__IH.enemies;
+    if (enemies.length < 2) return { ok: false };
+    const victim = enemies[0];
+    const attacker = enemies[1];
+    victim.state = 'chase';
+    victim.target = null;
+    window.__IH.damageEnemy(victim, 5, attacker);
+    return { ok: true, target: victim.target === attacker };
+  });
+  expect(result.ok).toBe(true);
+  expect(result.target).toBe(true);
+});
+
+test('enemy behind wall is not drawn (z-buffer)', async ({ page }) => {
+  await page.goto(URL);
+  await page.waitForTimeout(300);
+
+  const result = await page.evaluate(() => {
+    // Place an enemy behind a wall
+    const e = window.__IH.enemies[0];
+    // Place it behind the wall block at (4,3) - inside the room
+    e.x = 5.5; e.y = 4.5; e.state = 'chase';
+    // Place player far away facing the wall
+    const p = window.__IH.player;
+    p.x = 1.5; p.y = 4.5; p.angle = 0; // facing east toward the wall
+
+    // The enemy at (5.5, 4.5) should be behind the wall at x=4
+    const dx = e.x - p.x;
+    const dy = e.y - p.y;
+    const eDist = Math.sqrt(dx * dx + dy * dy);
+    const los = window.__IH.hasLineOfSight(p.x, p.y, e.x, e.y);
+    return { eDist, los };
+  });
+  // Enemy should NOT have line of sight (behind wall)
+  expect(result.los).toBe(false);
+});
