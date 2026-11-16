@@ -1,3 +1,8 @@
 node_modules/
 test-results/
 playwright-report/
+www/
+ios/App/build/
+ios/App/Pods/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/

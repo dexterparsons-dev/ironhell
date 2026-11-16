@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "devDependencies": {
-    "@playwright/test": "^1.49.0"
+    "@playwright/test": "^1.49.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2"
   }
 }

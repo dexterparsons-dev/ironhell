@@ -1,0 +1,193 @@
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+      TEAM_ID: ${{ secrets.TEAM_ID }}
+      CERTIFICATE_P12: ${{ secrets.CERTIFICATE_P12 }}
+      CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+      BUILD_NUMBER: ${{ github.run_number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Copy game to www
+        run: |
+          mkdir -p www
+          cp ironhell.html www/index.html
+
+      - name: Capacitor sync
+        run: npx cap sync ios
+
+      - name: Set build number in Xcode project
+        working-directory: ios/App
+        run: |
+          agvtool new-version -all "$BUILD_NUMBER"
+          agvtool new-marketing-version "1.0.0"
+
+      - name: Register bundle ID via ASC API
+        run: |
+          # Generate JWT for App Store Connect API
+          python3 - << 'PYEOF'
+          import json, time, base64, subprocess, os, sys
+
+          key_id = os.environ["ASC_KEY_ID"]
+          issuer_id = os.environ["ASC_ISSUER_ID"]
+          key_content = base64.b64decode(os.environ["ASC_KEY_CONTENT"])
+
+          # Write the key to a temp file
+          key_path = "/tmp/asc_key.p8"
+          with open(key_path, "wb") as f:
+              f.write(key_content)
+
+          # Build JWT header and payload
+          header = base64.urlsafe_b64encode(json.dumps({
+              "alg": "ES256", "kid": key_id, "typ": "JWT"
+          }).encode()).rstrip(b"=").decode()
+
+          now = int(time.time())
+          payload = base64.urlsafe_b64encode(json.dumps({
+              "iss": issuer_id, "iat": now, "exp": now + 1200,
+              "aud": "appstoreconnect-v1"
+          }).encode()).rstrip(b"=").decode()
+
+          signing_input = f"{header}.{payload}"
+
+          # Sign with openssl
+          result = subprocess.run(
+              ["openssl", "dgst", "-sha256", "-sign", key_path],
+              input=signing_input.encode(), capture_output=True
+          )
+          os.unlink(key_path)
+
+          # Convert DER signature to raw r||s for ES256
+          from subprocess import run as srun
+          der = result.stdout
+          # Parse DER SEQUENCE { INTEGER r, INTEGER s }
+          def parse_der_sig(der_bytes):
+              assert der_bytes[0] == 0x30
+              idx = 2
+              r_len = der_bytes[idx + 1]
+              r = der_bytes[idx + 2:idx + 2 + r_len]
+              idx = idx + 2 + r_len
+              s_len = der_bytes[idx + 1]
+              s = der_bytes[idx + 2:idx + 2 + s_len]
+              # Pad/trim to 32 bytes
+              r = r[-32:].rjust(32, b'\x00')
+              s = s[-32:].rjust(32, b'\x00')
+              return r + s
+
+          raw_sig = parse_der_sig(der)
+          sig = base64.urlsafe_b64encode(raw_sig).rstrip(b"=").decode()
+          token = f"{signing_input}.{sig}"
+
+          # Check if bundle ID already exists
+          import urllib.request, urllib.error
+          check_url = "https://api.appstoreconnect.apple.com/v1/bundleIds?filter[identifier]=com.codynamics.ironhell"
+          req = urllib.request.Request(check_url, headers={"Authorization": f"Bearer {token}"})
+          try:
+              resp = urllib.request.urlopen(req)
+              data = json.loads(resp.read())
+              if data.get("data") and len(data["data"]) > 0:
+                  print("Bundle ID com.codynamics.ironhell already registered")
+                  sys.exit(0)
+          except urllib.error.HTTPError as e:
+              print(f"Check failed: {e.code} {e.read().decode()}")
+
+          # Register the bundle ID
+          register_url = "https://api.appstoreconnect.apple.com/v1/bundleIds"
+          body = json.dumps({
+              "data": {
+                  "type": "bundleIds",
+                  "attributes": {
+                      "identifier": "com.codynamics.ironhell",
+                      "name": "IRONHELL",
+                      "platform": "IOS"
+                  }
+              }
+          }).encode()
+          req = urllib.request.Request(
+              register_url, data=body,
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json"
+              },
+              method="POST"
+          )
+          try:
+              resp = urllib.request.urlopen(req)
+              print(f"Bundle ID registered: {json.loads(resp.read())['data']['id']}")
+          except urllib.error.HTTPError as e:
+              err = e.read().decode()
+              if "ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE" in err or "already exists" in err.lower():
+                  print("Bundle ID already exists (race condition OK)")
+              else:
+                  print(f"Registration failed: {e.code} {err}")
+                  sys.exit(1)
+          PYEOF
+
+      - name: Install signing certificate
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          echo "$CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          rm "$CERT_PATH"
+
+          # Set keychain search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Setup Ruby and Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: ios
+
+      - name: Build and upload
+        working-directory: ios
+        run: bundle exec fastlane ios beta
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          if [ -n "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+          fi
